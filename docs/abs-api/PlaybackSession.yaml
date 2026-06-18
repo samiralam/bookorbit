@@ -1,0 +1,171 @@
+components:
+  schemas:
+    playbackSessionId:
+      type: string
+      description: The ID of the playback session.
+      format: uuid
+      example: c1a2b3c4-d5e6-4f70-8a9b-0c1d2e3f4a5b
+    playMethod:
+      type: integer
+      description: >-
+        How the media is being played.
+        0 = direct play, 1 = direct stream, 2 = transcode, 3 = local.
+      enum: [0, 1, 2, 3]
+      example: 0
+    PlaybackSession:
+      type: object
+      description: >-
+        A playback session as returned to clients by POST /api/items/{id}/play and
+        GET /api/session/{id} (PlaybackSession.toJSONForClient). The `audioTracks` array differs by
+        play method: for direct play it lists the item's real tracks; for transcode it contains a
+        single synthetic track whose contentUrl points at the HLS playlist under /hls.
+      properties:
+        id:
+          $ref: "#/components/schemas/playbackSessionId"
+        userId:
+          type: string
+          format: uuid
+          description: The ID of the user the session belongs to.
+        libraryId:
+          type: string
+          format: uuid
+          nullable: true
+          description: The ID of the library the item belongs to.
+        libraryItemId:
+          $ref: "./LibraryItem.yaml#/components/schemas/libraryItemId"
+        bookId:
+          type: string
+          format: uuid
+          nullable: true
+          description: The ID of the book media. Null for podcast episode sessions.
+        episodeId:
+          type: string
+          format: uuid
+          nullable: true
+          description: The ID of the podcast episode. Null for book sessions.
+        mediaType:
+          type: string
+          enum: [book, podcast]
+          description: The media type of the library item.
+        mediaMetadata:
+          type: object
+          description: Snapshot of the media metadata at session start.
+        chapters:
+          type: array
+          description: Chapters for the media item.
+          items:
+            type: object
+        displayTitle:
+          type: string
+          description: Title to display for the playing media.
+        displayAuthor:
+          type: string
+          description: Author to display for the playing media.
+        coverPath:
+          type: string
+          nullable: true
+          description: The absolute path on the server of the cover image.
+        duration:
+          type: number
+          format: float
+          description: The total duration (in seconds) of the playing media.
+        playMethod:
+          $ref: "#/components/schemas/playMethod"
+        mediaPlayer:
+          type: string
+          description: The media player the client reported using.
+        deviceInfo:
+          $ref: "#/components/schemas/DeviceInfo"
+        serverVersion:
+          type: string
+          description: The server version the session was created on.
+        date:
+          type: string
+          description: The day the session was started, formatted YYYY-MM-DD.
+          example: "2026-01-01"
+        dayOfWeek:
+          type: string
+          description: The day of the week the session was started.
+          example: Monday
+        timeListening:
+          type: number
+          format: float
+          description: The amount of time (in seconds) the user has listened during this session.
+        startTime:
+          type: number
+          format: float
+          description: The media position (in seconds) at the start of the session (resume point).
+        currentTime:
+          type: number
+          format: float
+          description: The last reported media position (in seconds).
+        startedAt:
+          $ref: "../schemas.yaml#/components/schemas/createdAt"
+        updatedAt:
+          $ref: "../schemas.yaml#/components/schemas/updatedAt"
+        audioTracks:
+          type: array
+          description: The audio tracks the client should play.
+          items:
+            $ref: "./files/AudioTrack.yaml#/components/schemas/AudioTrack"
+        libraryItem:
+          description: >-
+            The expanded library item (toOldJSONExpanded) — the base fields below plus a fully
+            populated `media` object. A dedicated expanded schema is not yet defined in this spec.
+          allOf:
+            - $ref: "./LibraryItem.yaml#/components/schemas/libraryItemBase"
+        coverAspectRatio:
+          type: number
+          nullable: true
+          description: Present only for share sessions.
+    DeviceInfo:
+      type: object
+      description: >-
+        Information about the device a playback session is running on. Built server-side from the
+        request IP and user-agent merged with the client-supplied deviceInfo. When the client sends
+        deviceInfo.deviceId, the server upserts a Device row keyed by it.
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The server-side device record ID.
+        deviceId:
+          type: string
+          nullable: true
+          description: The client-supplied stable device identifier.
+        userId:
+          type: string
+          format: uuid
+          nullable: true
+        ipAddress:
+          type: string
+          nullable: true
+        browserName:
+          type: string
+          nullable: true
+        browserVersion:
+          type: string
+          nullable: true
+        osName:
+          type: string
+          nullable: true
+        osVersion:
+          type: string
+          nullable: true
+        clientName:
+          type: string
+          nullable: true
+          description: The name of the client app (e.g. "Abs Android").
+        clientVersion:
+          type: string
+          nullable: true
+        manufacturer:
+          type: string
+          nullable: true
+        model:
+          type: string
+          nullable: true
+        sdkVersion:
+          type: integer
+          nullable: true
+          description: Android SDK version, when applicable.
