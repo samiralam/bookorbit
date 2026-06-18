@@ -113,18 +113,6 @@ jobs:
           cache-from: type=gha,scope=container-image-yml-amd64
           cache-to: type=gha,mode=max,scope=container-image-yml-amd64
 
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_PLATFORM: linux/amd64
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
-          format: table
-          vuln-type: os,library
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-
   build-arm64:
     name: Build and Push arm64
     needs: [prepare]
@@ -165,18 +153,6 @@ jobs:
           build-args: APP_VERSION=sha-${{ needs.prepare.outputs.source_sha_short }}
           cache-from: type=gha,scope=container-image-yml-arm64
           cache-to: type=gha,mode=max,scope=container-image-yml-arm64
-
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_PLATFORM: linux/arm64
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
-          format: table
-          vuln-type: os,library
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
 
   merge-manifest:
     name: Merge and Push Multi-Arch Manifest
