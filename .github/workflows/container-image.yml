@@ -3,20 +3,16 @@ run-name: >-
   ${{ github.event_name == 'workflow_run' && format('Image - {0} ({1})', github.event.workflow_run.head_commit.message, github.event.workflow_run.head_branch) || format('Image - {0}', github.ref_name) }}
 
 on:
-  # Break-glass: bypasses CI/E2E gate. Use only when CI is broken and a hotfix image is urgently needed.
+  # Manual build from any branch. Bypasses the CI/E2E gate, so the resulting image is unverified.
+  # Publishes a tag named after the branch (e.g. :implement-abs-api); pushes to main publish :main.
   workflow_dispatch:
-    inputs:
-      force_rebuild:
-        description: Rebuild even if image for this SHA already exists in GHCR
-        type: boolean
-        default: false
   workflow_run:
     workflows: ["CI"]
     types: [completed]
     branches: [main]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -44,55 +40,41 @@ jobs:
     outputs:
       source_sha: ${{ steps.ctx.outputs.source_sha }}
       source_sha_short: ${{ steps.ctx.outputs.source_sha_short }}
-      update_main: ${{ steps.ctx.outputs.update_main }}
-      skip_build: ${{ steps.ctx.outputs.skip_build }}
+      branch_tag: ${{ steps.ctx.outputs.branch_tag }}
     steps:
       - name: Resolve build context
         id: ctx
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          GH_REF: ${{ github.ref }}
           WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           GH_SHA: ${{ github.sha }}
-          GH_TOKEN: ${{ github.token }}
-          IMAGE_NAME: ${{ github.repository }}
-          FORCE_REBUILD: ${{ inputs.force_rebuild }}
+          GH_REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$GH_REF" != "refs/heads/main" ]]; then
-            echo "::error::workflow_dispatch is only supported from main."
-            exit 1
-          fi
           if [[ "$EVENT_NAME" == "workflow_run" ]]; then
             SOURCE_SHA="$WORKFLOW_RUN_HEAD_SHA"
-            echo "update_main=true" >> "$GITHUB_OUTPUT"
+            BRANCH="$WORKFLOW_RUN_HEAD_BRANCH"
           else
             SOURCE_SHA="$GH_SHA"
-            echo "update_main=false" >> "$GITHUB_OUTPUT"
+            BRANCH="$GH_REF_NAME"
           fi
           SOURCE_SHA_SHORT="${SOURCE_SHA:0:12}"
+          # Sanitize the branch name into a valid Docker tag: only [A-Za-z0-9._-],
+          # no leading separators, max 128 chars (e.g. feature/foo -> feature-foo).
+          BRANCH_TAG=$(printf '%s' "$BRANCH" | sed -E 's#[^A-Za-z0-9._-]+#-#g; s#^[.-]+##')
+          BRANCH_TAG="${BRANCH_TAG:0:128}"
+          if [[ -z "$BRANCH_TAG" ]]; then
+            echo "::error::Could not derive a valid image tag from branch '${BRANCH}'."
+            exit 1
+          fi
           echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
           echo "source_sha_short=${SOURCE_SHA_SHORT}" >> "$GITHUB_OUTPUT"
-          IMAGE_LOWER=$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
-          HTTP_STATUS_SHORT=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.oci.image.index.v1+json" \
-            "https://ghcr.io/v2/${IMAGE_LOWER}/manifests/sha-${SOURCE_SHA_SHORT}")
-          HTTP_STATUS_FULL=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.oci.image.index.v1+json" \
-            "https://ghcr.io/v2/${IMAGE_LOWER}/manifests/sha-${SOURCE_SHA}")
-          if [[ ("$HTTP_STATUS_SHORT" == "200" || "$HTTP_STATUS_FULL" == "200") && "${FORCE_REBUILD}" != "true" ]]; then
-            echo "Image sha-${SOURCE_SHA_SHORT} already exists in GHCR, skipping rebuild."
-            echo "skip_build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip_build=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "branch_tag=${BRANCH_TAG}" >> "$GITHUB_OUTPUT"
 
   build-amd64:
     name: Build and Push amd64
     needs: [prepare]
-    if: needs.prepare.outputs.skip_build != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -146,7 +128,6 @@ jobs:
   build-arm64:
     name: Build and Push arm64
     needs: [prepare]
-    if: needs.prepare.outputs.skip_build != 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     permissions:
@@ -200,7 +181,6 @@ jobs:
   merge-manifest:
     name: Merge and Push Multi-Arch Manifest
     needs: [prepare, build-amd64, build-arm64]
-    if: needs.prepare.outputs.skip_build != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -220,40 +200,25 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GHCR_TOKEN != '' && secrets.GHCR_TOKEN || github.token }}
 
-      - name: Create SHA manifest
+      - name: Create branch manifest
         shell: bash
         env:
           REGISTRY: ${{ env.REGISTRY }}
           IMAGE: ${{ env.IMAGE_NAME }}
-          SHA_SHORT: ${{ needs.prepare.outputs.source_sha_short }}
+          BRANCH_TAG: ${{ needs.prepare.outputs.branch_tag }}
           AMD64_DIGEST: ${{ needs.build-amd64.outputs.digest }}
           ARM64_DIGEST: ${{ needs.build-arm64.outputs.digest }}
         run: |
           FULL_IMAGE="${REGISTRY}/${IMAGE}"
           docker buildx imagetools create \
-            --tag "${FULL_IMAGE}:sha-${SHA_SHORT}" \
+            --tag "${FULL_IMAGE}:${BRANCH_TAG}" \
             "${FULL_IMAGE}@${AMD64_DIGEST}" \
             "${FULL_IMAGE}@${ARM64_DIGEST}"
 
-      - name: Update main tag
-        if: needs.prepare.outputs.update_main == 'true'
+      - name: Inspect branch manifest
         shell: bash
         env:
           REGISTRY: ${{ env.REGISTRY }}
           IMAGE: ${{ env.IMAGE_NAME }}
-          AMD64_DIGEST: ${{ needs.build-amd64.outputs.digest }}
-          ARM64_DIGEST: ${{ needs.build-arm64.outputs.digest }}
-        run: |
-          FULL_IMAGE="${REGISTRY}/${IMAGE}"
-          docker buildx imagetools create \
-            --tag "${FULL_IMAGE}:main" \
-            "${FULL_IMAGE}@${AMD64_DIGEST}" \
-            "${FULL_IMAGE}@${ARM64_DIGEST}"
-
-      - name: Inspect SHA manifest
-        shell: bash
-        env:
-          REGISTRY: ${{ env.REGISTRY }}
-          IMAGE: ${{ env.IMAGE_NAME }}
-          SHA_SHORT: ${{ needs.prepare.outputs.source_sha_short }}
-        run: docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:sha-${SHA_SHORT}"
+          BRANCH_TAG: ${{ needs.prepare.outputs.branch_tag }}
+        run: docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:${BRANCH_TAG}"
