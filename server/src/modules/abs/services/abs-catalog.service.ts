@@ -1,0 +1,154 @@
+import { Injectable } from '@nestjs/common';
+
+import type { RequestUser } from '../../../common/types/request-user';
+import { LibraryService } from '../../library/library.service';
+import { AbsHttpException } from '../abs-errors';
+import { encodeAbsId } from '../abs-id.util';
+import { AbsReadRepository, type AbsAudioFileRow, type AbsItemRow, type AbsItemSortField } from '../abs-read.repository';
+import { toAbsLibraryItem, type AbsItemRelations } from '../mappers/abs-item.mapper';
+import { AbsProgressService } from './abs-progress.service';
+
+export interface AbsItemQuery {
+  limit: number;
+  page: number;
+  sort: AbsItemSortField;
+  desc: boolean;
+  minified: boolean;
+}
+
+function groupBy<T, K>(items: T[], keyFn: (item: T) => K): Map<K, T[]> {
+  const map = new Map<K, T[]>();
+  for (const item of items) {
+    const key = keyFn(item);
+    const list = map.get(key);
+    if (list) list.push(item);
+    else map.set(key, [item]);
+  }
+  return map;
+}
+
+/** Maps ABS sort query strings to the columns the read repository can order by. */
+export function parseAbsSort(sort: string | undefined): AbsItemSortField {
+  if (!sort) return 'addedAt';
+  if (sort.includes('title')) return 'title';
+  if (sort.includes('publishedYear')) return 'publishedYear';
+  return 'addedAt';
+}
+
+/** Assembles ABS LibraryItems from BookOrbit data, enforcing the user's library access. */
+@Injectable()
+export class AbsCatalogService {
+  constructor(
+    private readonly readRepo: AbsReadRepository,
+    private readonly progressService: AbsProgressService,
+    private readonly libraryService: LibraryService,
+  ) {}
+
+  private async assertLibraryAccess(user: RequestUser, libraryId: number): Promise<void> {
+    if (user.isSuperuser) return;
+    const accessible = await this.libraryService.findAccessibleLibraryIds(user);
+    if (!accessible.includes(libraryId)) throw AbsHttpException.notFound();
+  }
+
+  private async relationsFor(rows: AbsItemRow[]): Promise<Map<number, AbsItemRelations>> {
+    const bookIds = rows.map((r) => r.id);
+    const [authors, narrators, series, audioFiles] = await Promise.all([
+      this.readRepo.authorsByBookIds(bookIds),
+      this.readRepo.narratorsByBookIds(bookIds),
+      this.readRepo.seriesByBookIds(bookIds),
+      this.readRepo.audioFilesByBookIds(bookIds),
+    ]);
+    const authorsByBook = groupBy(authors, (a) => a.bookId);
+    const narratorsByBook = groupBy(narrators, (n) => n.bookId);
+    const seriesByBook = groupBy(series, (s) => s.bookId);
+    const filesByBook = groupBy(audioFiles, (f) => f.bookId);
+
+    const relations = new Map<number, AbsItemRelations>();
+    for (const row of rows) {
+      relations.set(row.id, {
+        authors: authorsByBook.get(row.id) ?? [],
+        narrators: narratorsByBook.get(row.id) ?? [],
+        series: seriesByBook.get(row.id) ?? [],
+        audioFiles: filesByBook.get(row.id) ?? [],
+      });
+    }
+    return relations;
+  }
+
+  /** `GET /api/libraries/:id/items` — the primary browse endpoint envelope. */
+  async listLibraryItems(user: RequestUser, libraryId: number, query: AbsItemQuery): Promise<Record<string, unknown>> {
+    await this.assertLibraryAccess(user, libraryId);
+
+    const offset = query.limit > 0 ? query.page * query.limit : 0;
+    const { rows, total } = await this.readRepo.listItems({
+      libraryId,
+      limit: query.limit,
+      offset,
+      sort: query.sort,
+      desc: query.desc,
+    });
+    const relations = await this.relationsFor(rows);
+    const progressByBook = await this.progressMap(user.id, rows);
+
+    const results = rows.map((row) =>
+      toAbsLibraryItem(row, relations.get(row.id)!, { minified: query.minified, mediaProgress: progressByBook.get(row.id) ?? null }),
+    );
+
+    return {
+      results,
+      total,
+      limit: query.limit,
+      page: query.page,
+      sortBy: 'addedAt',
+      sortDesc: query.desc,
+      filterBy: null,
+      mediaType: 'book',
+      minified: query.minified,
+      collapseseries: false,
+      include: '',
+      offset,
+    };
+  }
+
+  /** `GET /api/items/:id` — single expanded (or minified) item with the user's progress. */
+  async getLibraryItem(user: RequestUser, bookId: number, minified = false): Promise<Record<string, unknown>> {
+    const item = await this.readRepo.findItem(bookId);
+    if (!item || item.status === 'processing') throw AbsHttpException.notFound();
+    await this.assertLibraryAccess(user, item.libraryId);
+
+    const [relations, progress] = await Promise.all([
+      this.relationsFor([item]),
+      this.progressService.getMediaProgress(user.id, bookId, item.libraryId),
+    ]);
+    return toAbsLibraryItem(item, relations.get(item.id)!, { minified, mediaProgress: progress });
+  }
+
+  /** `POST /api/items/batch/get` — fetch many items by id, access-filtered. */
+  async getLibraryItemsBatch(user: RequestUser, bookIds: number[]): Promise<Record<string, unknown>[]> {
+    const items = await this.readRepo.findItemsByIds(bookIds);
+    const accessible = user.isSuperuser ? null : new Set(await this.libraryService.findAccessibleLibraryIds(user));
+    const visible = items.filter((i) => i.status !== 'processing' && (!accessible || accessible.has(i.libraryId)));
+    const relations = await this.relationsFor(visible);
+    const progressByBook = await this.progressMap(user.id, visible);
+    return visible.map((row) => toAbsLibraryItem(row, relations.get(row.id)!, { mediaProgress: progressByBook.get(row.id) ?? null }));
+  }
+
+  private async progressMap(userId: number, rows: AbsItemRow[]): Promise<Map<number, Record<string, unknown>>> {
+    const all = await this.progressService.listMediaProgressForUser(userId);
+    const wanted = new Set(rows.map((r) => encodeAbsId('libraryItem', r.id)));
+    const byBook = new Map<number, Record<string, unknown>>();
+    for (const mp of all) {
+      if (wanted.has(mp.libraryItemId as string)) {
+        const idStr = mp.libraryItemId as string;
+        const bookId = Number.parseInt(idStr.slice(idStr.indexOf('_') + 1), 10);
+        byBook.set(bookId, mp);
+      }
+    }
+    return byBook;
+  }
+
+  /** Audio files for playback (used by the playback service). */
+  audioFiles(bookId: number): Promise<AbsAudioFileRow[]> {
+    return this.readRepo.audioFilesByBookId(bookId);
+  }
+}

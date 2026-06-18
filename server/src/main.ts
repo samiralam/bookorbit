@@ -22,13 +22,21 @@ import {
   registerEmptyBodyContentTypeParser,
   shouldInjectEmptyJsonBody,
 } from './common/utils/bootstrap.utils';
+import { ABS_EXCLUDED_ROUTES, rewriteAbsUrl } from './modules/abs/abs-route-rewrite.util';
 
 const MAX_COVER_BYTES = 20 * 1024 * 1024;
 
 async function bootstrap() {
   const allowCloudflareInsights = parseBooleanEnv(process.env.CSP_ALLOW_CLOUDFLARE_INSIGHTS, false);
 
-  const adapter = new FastifyAdapter({ logger: false, trustProxy: parseTrustProxy(process.env.TRUST_PROXY), maxParamLength: 1000 });
+  const adapter = new FastifyAdapter({
+    logger: false,
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
+    maxParamLength: 1000,
+    // Remap the ABS `/auth/refresh` route to a private path before routing so it does not collide
+    // with BookOrbit's own `auth/refresh` controller (see abs-route-rewrite.util.ts).
+    rewriteUrl: (req) => rewriteAbsUrl(req.url ?? '/'),
+  });
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, { bufferLogs: true });
   app.useLogger(app.get(Logger));
 
@@ -57,7 +65,7 @@ async function bootstrap() {
   app.useWebSocketAdapter(new IoAdapter(app));
 
   app.setGlobalPrefix('api/v1', {
-    exclude: ['api/kobo/:deviceToken/(.*)', 'api/v3/(.*)', 'api/UserStorage/(.*)'],
+    exclude: ['api/kobo/:deviceToken/(.*)', 'api/v3/(.*)', 'api/UserStorage/(.*)', ...ABS_EXCLUDED_ROUTES],
   });
 
   app.useGlobalPipes(
