@@ -22,7 +22,7 @@ import {
   registerEmptyBodyContentTypeParser,
   shouldInjectEmptyJsonBody,
 } from './common/utils/bootstrap.utils';
-import { ABS_EXCLUDED_ROUTES, rewriteAbsUrl } from './modules/abs/abs-route-rewrite.util';
+import { ABS_EXCLUDED_ROUTES, isAbsRoute, rewriteAbsUrl } from './modules/abs/abs-route-rewrite.util';
 
 const MAX_COVER_BYTES = 20 * 1024 * 1024;
 
@@ -76,7 +76,9 @@ async function bootstrap() {
     }),
   );
 
-  app.useGlobalFilters(new GlobalExceptionFilter());
+  // ABS routes that never reach a controller (e.g. unimplemented endpoints 404ing) bypass the
+  // controller-scoped AbsExceptionFilter, so suppress BookOrbit's envelope for them here.
+  app.useGlobalFilters(new GlobalExceptionFilter(isAbsRoute));
 
   const appConfiguration = app.get<ConfigType<typeof appConfig>>(appConfig.KEY);
   if (appConfiguration.swaggerEnabled) {

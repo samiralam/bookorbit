@@ -47,3 +47,21 @@ export const ABS_EXCLUDED_ROUTES: string[] = [
   // Public (open-session track streaming, shares)
   'public/(.*)',
 ];
+
+/**
+ * The excluded routes use Fastify route syntax (`(.*)` wildcards); anchored they double as regexes.
+ * Compiled once so {@link isAbsRoute} can test a request path against the whole ABS surface.
+ */
+const ABS_ROUTE_MATCHERS: readonly RegExp[] = ABS_EXCLUDED_ROUTES.map((route) => new RegExp(`^/${route}$`));
+
+/**
+ * True when `url` falls under the ABS adapter surface. Used by the global exception filter to suppress
+ * BookOrbit's `{ statusCode, message, ... }` envelope for ABS paths that never reach a controller (e.g.
+ * unimplemented endpoints 404ing), since the controller-scoped `AbsExceptionFilter` only runs on matched
+ * routes and a foreign envelope breaks strict ABS clients (see abs-exception.filter.ts).
+ */
+export function isAbsRoute(url: string): boolean {
+  const queryIndex = url.indexOf('?');
+  const path = queryIndex === -1 ? url : url.slice(0, queryIndex);
+  return ABS_ROUTE_MATCHERS.some((matcher) => matcher.test(path));
+}

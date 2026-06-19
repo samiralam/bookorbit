@@ -5,6 +5,13 @@ import { FastifyReply, FastifyRequest } from 'fastify';
 export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(GlobalExceptionFilter.name);
 
+  /**
+   * `suppressEnvelopeFor` lets a foreign-protocol adapter (the ABS API) opt its routes out of
+   * BookOrbit's JSON error envelope. When it matches the request URL, the filter replies with a bare
+   * status and empty body — the shape unmatched ABS routes need (see abs-route-rewrite.util.ts).
+   */
+  constructor(private readonly suppressEnvelopeFor?: (url: string) => boolean) {}
+
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const reply = ctx.getResponse<FastifyReply>();
@@ -33,6 +40,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     }
 
     if (reply.sent) {
+      return;
+    }
+
+    if (this.suppressEnvelopeFor?.(request.url)) {
+      reply.status(status).send();
       return;
     }
 

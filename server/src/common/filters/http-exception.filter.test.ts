@@ -3,11 +3,11 @@ import { BadRequestException, HttpException, HttpStatus, Logger } from '@nestjs/
 
 import { GlobalExceptionFilter } from './http-exception.filter';
 
-function makeHost(options: { sent?: boolean } = {}) {
+function makeHost(options: { sent?: boolean; url?: string } = {}) {
   const send = vi.fn();
   const status = vi.fn().mockReturnValue({ send });
   const reply = { status, sent: options.sent ?? false };
-  const request = { url: '/api/books/1', id: 'req-123' };
+  const request = { url: options.url ?? '/api/books/1', id: 'req-123' };
 
   const host = {
     switchToHttp: () => ({
@@ -111,5 +111,24 @@ describe('GlobalExceptionFilter', () => {
     filter.catch(new BadRequestException('too late'), host);
 
     expect(status).not.toHaveBeenCalled();
+  });
+
+  it('sends a bare status (no envelope) when the suppress predicate matches the request url', () => {
+    const filter = new GlobalExceptionFilter((url) => url.startsWith('/api/me'));
+    const { host, status, send } = makeHost({ url: '/api/me/listening-sessions' });
+
+    filter.catch(new HttpException('Not Found', HttpStatus.NOT_FOUND), host);
+
+    expect(status).toHaveBeenCalledWith(HttpStatus.NOT_FOUND);
+    expect(send).toHaveBeenCalledWith();
+  });
+
+  it('still emits the envelope for urls the suppress predicate rejects', () => {
+    const filter = new GlobalExceptionFilter((url) => url.startsWith('/api/me'));
+    const { host, send } = makeHost({ url: '/api/books/1' });
+
+    filter.catch(new BadRequestException('invalid query'), host);
+
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ statusCode: HttpStatus.BAD_REQUEST }));
   });
 });

@@ -1,4 +1,4 @@
-import { ABS_EXCLUDED_ROUTES, ABS_INTERNAL_REFRESH_PATH, rewriteAbsUrl } from './abs-route-rewrite.util';
+import { ABS_EXCLUDED_ROUTES, ABS_INTERNAL_REFRESH_PATH, isAbsRoute, rewriteAbsUrl } from './abs-route-rewrite.util';
 
 describe('rewriteAbsUrl', () => {
   it('remaps POST /auth/refresh to the private internal path (avoids colliding with BookOrbit auth)', () => {
@@ -26,5 +26,25 @@ describe('ABS_EXCLUDED_ROUTES', () => {
 
   it('routes the internal refresh path past the global prefix', () => {
     expect(ABS_EXCLUDED_ROUTES).toContain('__abs/(.*)');
+  });
+});
+
+describe('isAbsRoute', () => {
+  it('matches exact and wildcard ABS surface paths', () => {
+    expect(isAbsRoute('/status')).toBe(true);
+    expect(isAbsRoute('/api/me')).toBe(true);
+    expect(isAbsRoute('/api/me/listening-sessions')).toBe(true);
+    expect(isAbsRoute('/public/session/abc/track/0')).toBe(true);
+  });
+
+  it('ignores the query string when matching', () => {
+    expect(isAbsRoute('/api/libraries/lib_5/items?filter=narrators.x')).toBe(true);
+  });
+
+  it('does not match BookOrbit native or unrelated routes', () => {
+    expect(isAbsRoute('/api/v1/books/1')).toBe(false);
+    expect(isAbsRoute('/api/kobo/token/library/sync')).toBe(false);
+    expect(isAbsRoute('/foo')).toBe(false);
+    expect(isAbsRoute('/api/men')).toBe(false);
   });
 });
