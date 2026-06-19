@@ -5,7 +5,7 @@ import type { RequestUser } from '../../../common/types/request-user';
 import { LibraryService } from '../../library/library.service';
 import { ABS_MEDIA_TYPE_BOOK, ABS_SERVER_VERSION } from '../abs.constants';
 import { AbsHttpException } from '../abs-errors';
-import { encodeAbsId } from '../abs-id.util';
+import { decodeAbsId, encodeAbsId } from '../abs-id.util';
 import { normalizeChapters } from '../abs-media.util';
 import { AbsReadRepository, type AbsAudioFileRow } from '../abs-read.repository';
 import { AbsSocketGateway } from '../abs-socket.gateway';
@@ -49,6 +49,16 @@ export interface SyncBody {
   currentTime?: number;
   timeListened?: number;
   duration?: number;
+}
+
+/** An offline-recorded session uploaded by the mobile app (REIMPLEMENTATION_GUIDE §7.3). */
+export interface LocalSessionBody {
+  id?: string;
+  libraryItemId?: string;
+  currentTime?: number;
+  timeListening?: number;
+  duration?: number;
+  updatedAt?: number;
 }
 
 /**
@@ -170,6 +180,43 @@ export class AbsPlaybackService {
     }
     this.sessions.delete(sessionId);
     this.socketGateway.emitUserSessionClosed(session.userId, sessionId);
+  }
+
+  /**
+   * Reconcile one offline-recorded session into `audiobook_progress` using newest-`updatedAt`-wins
+   * (REIMPLEMENTATION_GUIDE §7.3). Returns a per-session result; never throws on bad input.
+   */
+  async syncLocalSession(user: RequestUser, body: LocalSessionBody): Promise<Record<string, unknown>> {
+    const id = body.id ?? randomUUID();
+    const bookId = body.libraryItemId ? decodeAbsId('libraryItem', body.libraryItemId) : null;
+    if (bookId === null || typeof body.currentTime !== 'number') {
+      return { id, success: false, progressSynced: false, error: 'Invalid local session' };
+    }
+
+    const { progressSynced, mediaProgress } = await this.progressService.mergeOfflineProgress(user.id, bookId, {
+      currentTime: body.currentTime,
+      duration: body.duration,
+      updatedAt: body.updatedAt,
+    });
+
+    if (progressSynced && mediaProgress) {
+      this.socketGateway.emitUserItemProgressUpdated(user.id, {
+        id: mediaProgress.id as string,
+        sessionId: id,
+        deviceDescription: 'BookOrbit',
+        data: mediaProgress,
+      });
+    }
+    return { id, success: true, progressSynced };
+  }
+
+  /** Batch offline reconciliation: `{ results: [{ id, success, progressSynced, error? }] }`. */
+  async syncLocalSessions(user: RequestUser, sessions: LocalSessionBody[]): Promise<Record<string, unknown>> {
+    const results: Record<string, unknown>[] = [];
+    for (const session of sessions ?? []) {
+      results.push(await this.syncLocalSession(user, session));
+    }
+    return { results };
   }
 
   private requireOwnedSession(sessionId: string, user: RequestUser): AbsPlaybackSession {

@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { DB } from '../../db';
@@ -227,5 +227,218 @@ export class AbsReadRepository {
   async libraryIdForBook(bookId: number): Promise<number | null> {
     const [row] = await this.db.select({ libraryId: schema.books.libraryId }).from(schema.books).where(eq(schema.books.id, bookId)).limit(1);
     return row?.libraryId ?? null;
+  }
+
+  /**
+   * Translate a decoded ABS browse filter into a `books.id IN (...)` predicate. Supports the common
+   * id/name groups; unknown or unsupported groups (e.g. per-user `progress`) yield `undefined` so the
+   * caller can fall back to no filtering.
+   */
+  filterWhere(group: string, value: string): SQL | undefined {
+    switch (group) {
+      case 'authors': {
+        const authorId = Number.parseInt(value, 10);
+        if (!Number.isInteger(authorId)) return undefined;
+        return inArray(
+          schema.books.id,
+          this.db.select({ bookId: schema.bookAuthors.bookId }).from(schema.bookAuthors).where(eq(schema.bookAuthors.authorId, authorId)),
+        );
+      }
+      case 'series': {
+        const seriesId = Number.parseInt(value, 10);
+        if (!Number.isInteger(seriesId)) return undefined;
+        return inArray(
+          schema.books.id,
+          this.db
+            .select({ bookId: schema.bookSeriesMemberships.bookId })
+            .from(schema.bookSeriesMemberships)
+            .where(eq(schema.bookSeriesMemberships.seriesId, seriesId)),
+        );
+      }
+      case 'narrators':
+        return inArray(
+          schema.books.id,
+          this.db
+            .select({ bookId: schema.bookNarrators.bookId })
+            .from(schema.bookNarrators)
+            .innerJoin(schema.narrators, eq(schema.narrators.id, schema.bookNarrators.narratorId))
+            .where(eq(schema.narrators.name, value)),
+        );
+      case 'genres':
+        return inArray(
+          schema.books.id,
+          this.db
+            .select({ bookId: schema.bookGenres.bookId })
+            .from(schema.bookGenres)
+            .innerJoin(schema.genres, eq(schema.genres.id, schema.bookGenres.genreId))
+            .where(eq(schema.genres.name, value)),
+        );
+      case 'tags':
+        return inArray(
+          schema.books.id,
+          this.db
+            .select({ bookId: schema.bookTags.bookId })
+            .from(schema.bookTags)
+            .innerJoin(schema.tags, eq(schema.tags.id, schema.bookTags.tagId))
+            .where(eq(schema.tags.name, value)),
+        );
+      case 'languages':
+        return inArray(
+          schema.books.id,
+          this.db.select({ bookId: schema.bookMetadata.bookId }).from(schema.bookMetadata).where(eq(schema.bookMetadata.language, value)),
+        );
+      default:
+        return undefined;
+    }
+  }
+
+  /** Title/author substring search within a library, capped at `limit` rows. */
+  async searchItems(libraryId: number, query: string, limit: number): Promise<AbsItemRow[]> {
+    const term = `%${query}%`;
+    const matchingAuthorBookIds = this.db
+      .select({ bookId: schema.bookAuthors.bookId })
+      .from(schema.bookAuthors)
+      .innerJoin(schema.authors, eq(schema.authors.id, schema.bookAuthors.authorId))
+      .where(ilike(schema.authors.name, term));
+
+    return this.db
+      .select(this.baseItemSelect())
+      .from(schema.books)
+      .leftJoin(schema.bookMetadata, eq(schema.bookMetadata.bookId, schema.books.id))
+      .where(
+        and(
+          eq(schema.books.libraryId, libraryId),
+          sql`${schema.books.status} <> 'processing'`,
+          or(ilike(schema.bookMetadata.title, term), inArray(schema.books.id, matchingAuthorBookIds)),
+        ),
+      )
+      .orderBy(asc(schema.bookMetadata.title), asc(schema.books.id))
+      .limit(limit > 0 ? limit : 25);
+  }
+
+  /** Series present in a library, with their member book ids ordered by series index. */
+  async seriesInLibrary(libraryId: number): Promise<{ id: number; name: string; books: { bookId: number; sequence: number | null }[] }[]> {
+    const rows = await this.db
+      .select({
+        id: schema.bookSeries.id,
+        name: schema.bookSeries.name,
+        bookId: schema.bookSeriesMemberships.bookId,
+        sequence: schema.bookSeriesMemberships.seriesIndex,
+      })
+      .from(schema.bookSeriesMemberships)
+      .innerJoin(schema.bookSeries, eq(schema.bookSeries.id, schema.bookSeriesMemberships.seriesId))
+      .innerJoin(schema.books, eq(schema.books.id, schema.bookSeriesMemberships.bookId))
+      .where(and(eq(schema.books.libraryId, libraryId), sql`${schema.books.status} <> 'processing'`))
+      .orderBy(asc(schema.bookSeries.name), asc(schema.bookSeriesMemberships.seriesIndex), asc(schema.bookSeriesMemberships.bookId));
+
+    const byId = new Map<number, { id: number; name: string; books: { bookId: number; sequence: number | null }[] }>();
+    for (const row of rows) {
+      let series = byId.get(row.id);
+      if (!series) {
+        series = { id: row.id, name: row.name, books: [] };
+        byId.set(row.id, series);
+      }
+      series.books.push({ bookId: row.bookId, sequence: row.sequence });
+    }
+    return [...byId.values()];
+  }
+
+  /** A user's collections, restricted to books in the given library, with member book ids. */
+  async collectionsForUser(
+    userId: number,
+    libraryId: number,
+  ): Promise<{ id: number; name: string; description: string | null; bookIds: number[] }[]> {
+    const cols = await this.db
+      .select({ id: schema.collections.id, name: schema.collections.name, description: schema.collections.description })
+      .from(schema.collections)
+      .where(eq(schema.collections.userId, userId))
+      .orderBy(asc(schema.collections.displayOrder), asc(schema.collections.name));
+    if (cols.length === 0) return [];
+
+    const members = await this.db
+      .select({ collectionId: schema.collectionBooks.collectionId, bookId: schema.collectionBooks.bookId })
+      .from(schema.collectionBooks)
+      .innerJoin(schema.books, eq(schema.books.id, schema.collectionBooks.bookId))
+      .where(
+        and(
+          inArray(
+            schema.collectionBooks.collectionId,
+            cols.map((c) => c.id),
+          ),
+          eq(schema.books.libraryId, libraryId),
+          sql`${schema.books.status} <> 'processing'`,
+        ),
+      )
+      .orderBy(asc(schema.collectionBooks.addedAt));
+
+    const booksByCollection = new Map<number, number[]>();
+    for (const m of members) {
+      const list = booksByCollection.get(m.collectionId);
+      if (list) list.push(m.bookId);
+      else booksByCollection.set(m.collectionId, [m.bookId]);
+    }
+    return cols.map((c) => ({ id: c.id, name: c.name, description: c.description, bookIds: booksByCollection.get(c.id) ?? [] }));
+  }
+
+  /** Distinct filter values for a library (authors/narrators/series/genres/tags/languages). */
+  async filterData(libraryId: number): Promise<{
+    authors: { id: number; name: string }[];
+    narrators: string[];
+    series: { id: number; name: string }[];
+    genres: string[];
+    tags: string[];
+    languages: string[];
+  }> {
+    const bookIdsForLibrary = this.db
+      .select({ id: schema.books.id })
+      .from(schema.books)
+      .where(and(eq(schema.books.libraryId, libraryId), sql`${schema.books.status} <> 'processing'`));
+
+    const [authors, narrators, series, genres, tags, languages] = await Promise.all([
+      this.db
+        .selectDistinct({ id: schema.authors.id, name: schema.authors.name })
+        .from(schema.bookAuthors)
+        .innerJoin(schema.authors, eq(schema.authors.id, schema.bookAuthors.authorId))
+        .where(inArray(schema.bookAuthors.bookId, bookIdsForLibrary))
+        .orderBy(asc(schema.authors.name)),
+      this.db
+        .selectDistinct({ name: schema.narrators.name })
+        .from(schema.bookNarrators)
+        .innerJoin(schema.narrators, eq(schema.narrators.id, schema.bookNarrators.narratorId))
+        .where(inArray(schema.bookNarrators.bookId, bookIdsForLibrary))
+        .orderBy(asc(schema.narrators.name)),
+      this.db
+        .selectDistinct({ id: schema.bookSeries.id, name: schema.bookSeries.name })
+        .from(schema.bookSeriesMemberships)
+        .innerJoin(schema.bookSeries, eq(schema.bookSeries.id, schema.bookSeriesMemberships.seriesId))
+        .where(inArray(schema.bookSeriesMemberships.bookId, bookIdsForLibrary))
+        .orderBy(asc(schema.bookSeries.name)),
+      this.db
+        .selectDistinct({ name: schema.genres.name })
+        .from(schema.bookGenres)
+        .innerJoin(schema.genres, eq(schema.genres.id, schema.bookGenres.genreId))
+        .where(inArray(schema.bookGenres.bookId, bookIdsForLibrary))
+        .orderBy(asc(schema.genres.name)),
+      this.db
+        .selectDistinct({ name: schema.tags.name })
+        .from(schema.bookTags)
+        .innerJoin(schema.tags, eq(schema.tags.id, schema.bookTags.tagId))
+        .where(inArray(schema.bookTags.bookId, bookIdsForLibrary))
+        .orderBy(asc(schema.tags.name)),
+      this.db
+        .selectDistinct({ language: schema.bookMetadata.language })
+        .from(schema.bookMetadata)
+        .where(and(inArray(schema.bookMetadata.bookId, bookIdsForLibrary), sql`${schema.bookMetadata.language} is not null`))
+        .orderBy(asc(schema.bookMetadata.language)),
+    ]);
+
+    return {
+      authors,
+      narrators: narrators.map((n) => n.name),
+      series,
+      genres: genres.map((g) => g.name),
+      tags: tags.map((t) => t.name),
+      languages: languages.map((l) => l.language).filter((l): l is string => l != null),
+    };
   }
 }

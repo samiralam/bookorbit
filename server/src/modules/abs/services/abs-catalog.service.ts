@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
+import { type SQL } from 'drizzle-orm';
 
 import type { RequestUser } from '../../../common/types/request-user';
 import { LibraryService } from '../../library/library.service';
 import { AbsHttpException } from '../abs-errors';
-import { encodeAbsId } from '../abs-id.util';
+import { decodeAbsFilter } from '../abs-filter.util';
+import { decodeAbsId, encodeAbsId } from '../abs-id.util';
 import { AbsReadRepository, type AbsAudioFileRow, type AbsItemRow, type AbsItemSortField } from '../abs-read.repository';
 import { toAbsLibraryItem, type AbsItemRelations } from '../mappers/abs-item.mapper';
 import { AbsProgressService } from './abs-progress.service';
@@ -14,6 +16,8 @@ export interface AbsItemQuery {
   sort: AbsItemSortField;
   desc: boolean;
   minified: boolean;
+  /** Raw `filter=group.base64url(value)` browse filter (REIMPLEMENTATION_GUIDE §4.2). */
+  filter?: string;
 }
 
 function groupBy<T, K>(items: T[], keyFn: (item: T) => K): Map<K, T[]> {
@@ -25,6 +29,12 @@ function groupBy<T, K>(items: T[], keyFn: (item: T) => K): Map<K, T[]> {
     else map.set(key, [item]);
   }
   return map;
+}
+
+/** Reorder fetched rows to match a desired book-id order (e.g. most-recently-updated first). */
+function orderByIds(rows: AbsItemRow[], order: number[]): AbsItemRow[] {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return order.map((id) => byId.get(id)).filter((r): r is AbsItemRow => r != null);
 }
 
 /** Maps ABS sort query strings to the columns the read repository can order by. */
@@ -48,6 +58,22 @@ export class AbsCatalogService {
     if (user.isSuperuser) return;
     const accessible = await this.libraryService.findAccessibleLibraryIds(user);
     if (!accessible.includes(libraryId)) throw AbsHttpException.notFound();
+  }
+
+  /** Decode a `group.base64` browse filter into a SQL predicate (id-based groups carry ABS ids). */
+  private buildFilterWhere(raw: string | undefined): SQL | undefined {
+    const decoded = decodeAbsFilter(raw);
+    if (!decoded) return undefined;
+
+    let value = decoded.value;
+    if (decoded.group === 'authors') {
+      const id = decodeAbsId('author', value);
+      value = id != null ? String(id) : '';
+    } else if (decoded.group === 'series') {
+      const id = decodeAbsId('series', value);
+      value = id != null ? String(id) : '';
+    }
+    return value ? this.readRepo.filterWhere(decoded.group, value) : undefined;
   }
 
   private async relationsFor(rows: AbsItemRow[]): Promise<Map<number, AbsItemRelations>> {
@@ -86,6 +112,7 @@ export class AbsCatalogService {
       offset,
       sort: query.sort,
       desc: query.desc,
+      extraWhere: this.buildFilterWhere(query.filter),
     });
     const relations = await this.relationsFor(rows);
     const progressByBook = await this.progressMap(user.id, rows);
@@ -101,7 +128,7 @@ export class AbsCatalogService {
       page: query.page,
       sortBy: 'addedAt',
       sortDesc: query.desc,
-      filterBy: null,
+      filterBy: query.filter ?? null,
       mediaType: 'book',
       minified: query.minified,
       collapseseries: false,
@@ -131,6 +158,140 @@ export class AbsCatalogService {
     const relations = await this.relationsFor(visible);
     const progressByBook = await this.progressMap(user.id, visible);
     return visible.map((row) => toAbsLibraryItem(row, relations.get(row.id)!, { mediaProgress: progressByBook.get(row.id) ?? null }));
+  }
+
+  /** Assemble ABS LibraryItems for a set of already-fetched rows (relations + the user's progress). */
+  private async assembleItems(userId: number, rows: AbsItemRow[], minified: boolean): Promise<Record<string, unknown>[]> {
+    if (rows.length === 0) return [];
+    const relations = await this.relationsFor(rows);
+    const progressByBook = await this.progressMap(userId, rows);
+    return rows.map((row) => toAbsLibraryItem(row, relations.get(row.id)!, { minified, mediaProgress: progressByBook.get(row.id) ?? null }));
+  }
+
+  /** `GET /api/libraries/:id/search` — title/author search; client reads the `book` array. */
+  async search(user: RequestUser, libraryId: number, query: string, limit: number): Promise<Record<string, unknown>> {
+    await this.assertLibraryAccess(user, libraryId);
+    const term = query.trim();
+    if (!term) return { book: [], tags: [], authors: [], series: [] };
+
+    const rows = await this.readRepo.searchItems(libraryId, term, limit);
+    const items = await this.assembleItems(user.id, rows, true);
+    return {
+      book: items.map((libraryItem, i) => ({ libraryItem, matchKey: 'title', matchText: rows[i].title ?? '' })),
+      tags: [],
+      authors: [],
+      series: [],
+    };
+  }
+
+  /** `GET /api/libraries/:id/series` — paginated series with their books. */
+  async listSeries(user: RequestUser, libraryId: number, query: AbsItemQuery): Promise<Record<string, unknown>> {
+    await this.assertLibraryAccess(user, libraryId);
+    const all = await this.readRepo.seriesInLibrary(libraryId);
+    const total = all.length;
+    const offset = query.limit > 0 ? query.page * query.limit : 0;
+    const pageSeries = query.limit > 0 ? all.slice(offset, offset + query.limit) : all;
+
+    const bookIds = [...new Set(pageSeries.flatMap((s) => s.books.map((b) => b.bookId)))];
+    const rows = await this.readRepo.findItemsByIds(bookIds);
+    const itemsByBook = new Map((await this.assembleItems(user.id, rows, query.minified)).map((it, i) => [rows[i].id, it]));
+
+    const results = pageSeries.map((s) => ({
+      id: encodeAbsId('series', s.id),
+      name: s.name,
+      nameIgnorePrefix: s.name,
+      libraryItemIds: s.books.map((b) => encodeAbsId('libraryItem', b.bookId)),
+      books: s.books.map((b) => itemsByBook.get(b.bookId)).filter((it): it is Record<string, unknown> => it != null),
+      addedAt: 0,
+      totalDuration: 0,
+    }));
+
+    return { results, total, limit: query.limit, page: query.page, sortBy: 'name', sortDesc: query.desc, minified: query.minified, offset };
+  }
+
+  /** `GET /api/libraries/:id/collections` — paginated user collections with their books. */
+  async listCollections(user: RequestUser, libraryId: number, query: AbsItemQuery): Promise<Record<string, unknown>> {
+    await this.assertLibraryAccess(user, libraryId);
+    const all = await this.readRepo.collectionsForUser(user.id, libraryId);
+    const total = all.length;
+    const offset = query.limit > 0 ? query.page * query.limit : 0;
+    const page = query.limit > 0 ? all.slice(offset, offset + query.limit) : all;
+
+    const bookIds = [...new Set(page.flatMap((c) => c.bookIds))];
+    const rows = await this.readRepo.findItemsByIds(bookIds);
+    const itemsByBook = new Map((await this.assembleItems(user.id, rows, query.minified)).map((it, i) => [rows[i].id, it]));
+
+    const results = page.map((c) => ({
+      id: encodeAbsId('collection', c.id),
+      libraryId: encodeAbsId('library', libraryId),
+      name: c.name,
+      description: c.description,
+      books: c.bookIds.map((id) => itemsByBook.get(id)).filter((it): it is Record<string, unknown> => it != null),
+      lastUpdate: 0,
+      createdAt: 0,
+    }));
+
+    return { results, total, limit: query.limit, page: query.page, sortBy: 'name', sortDesc: query.desc, minified: query.minified, offset };
+  }
+
+  /** `GET /api/libraries/:id/filterdata` — valid filter values/ids for the library. */
+  async filterData(user: RequestUser, libraryId: number): Promise<Record<string, unknown>> {
+    await this.assertLibraryAccess(user, libraryId);
+    const data = await this.readRepo.filterData(libraryId);
+    return {
+      authors: data.authors.map((a) => ({ id: encodeAbsId('author', a.id), name: a.name })),
+      genres: data.genres,
+      tags: data.tags,
+      series: data.series.map((s) => ({ id: encodeAbsId('series', s.id), name: s.name })),
+      narrators: data.narrators,
+      languages: data.languages,
+      publishers: [],
+    };
+  }
+
+  /** `GET /api/libraries/:id/personalized` — home-screen shelves. */
+  async personalized(user: RequestUser, libraryId: number): Promise<Record<string, unknown>[]> {
+    await this.assertLibraryAccess(user, libraryId);
+
+    const inProgress = await this.itemsInProgressForLibrary(user, libraryId);
+    const { rows: recentRows } = await this.readRepo.listItems({ libraryId, limit: 10, offset: 0, sort: 'addedAt', desc: true });
+    const recent = await this.assembleItems(user.id, recentRows, true);
+
+    const shelves: Record<string, unknown>[] = [];
+    if (inProgress.length > 0) {
+      shelves.push({
+        id: 'continue-listening',
+        label: 'Continue Listening',
+        labelStringKey: 'LabelContinueListening',
+        type: 'book',
+        entities: inProgress,
+      });
+    }
+    shelves.push({ id: 'recently-added', label: 'Recently Added', labelStringKey: 'LabelRecentlyAdded', type: 'book', entities: recent });
+    return shelves;
+  }
+
+  /** `GET /api/me/items-in-progress` — Continue-listening shelf across all accessible libraries. */
+  async itemsInProgress(user: RequestUser): Promise<Record<string, unknown>[]> {
+    const bookIds = await this.progressService.listInProgressBookIds(user.id);
+    return this.itemsForBookIds(user, bookIds, true);
+  }
+
+  private async itemsInProgressForLibrary(user: RequestUser, libraryId: number): Promise<Record<string, unknown>[]> {
+    const bookIds = await this.progressService.listInProgressBookIds(user.id);
+    const rows = (await this.readRepo.findItemsByIds(bookIds)).filter((r) => r.libraryId === libraryId);
+    const ordered = orderByIds(rows, bookIds);
+    return this.assembleItems(user.id, ordered, true);
+  }
+
+  private async itemsForBookIds(user: RequestUser, bookIds: number[], minified: boolean): Promise<Record<string, unknown>[]> {
+    const items = await this.readRepo.findItemsByIds(bookIds);
+    const accessible = user.isSuperuser ? null : new Set(await this.libraryService.findAccessibleLibraryIds(user));
+    const visible = orderByIds(
+      items.filter((i) => i.status !== 'processing' && (!accessible || accessible.has(i.libraryId))),
+      bookIds,
+    );
+    return this.assembleItems(user.id, visible, minified);
   }
 
   private async progressMap(userId: number, rows: AbsItemRow[]): Promise<Map<number, Record<string, unknown>>> {

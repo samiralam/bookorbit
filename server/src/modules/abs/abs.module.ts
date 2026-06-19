@@ -14,6 +14,7 @@ import { AbsAuthorizeController } from './controllers/abs-authorize.controller';
 import { AbsItemsController } from './controllers/abs-items.controller';
 import { AbsLibrariesController } from './controllers/abs-libraries.controller';
 import { AbsMeController } from './controllers/abs-me.controller';
+import { AbsPlaylistsController } from './controllers/abs-playlists.controller';
 import { AbsPublicController } from './controllers/abs-public.controller';
 import { AbsSessionsController } from './controllers/abs-sessions.controller';
 import { AbsCatalogService } from './services/abs-catalog.service';
@@ -37,6 +38,7 @@ import { AbsStreamService } from './services/abs-stream.service';
     AbsItemsController,
     AbsSessionsController,
     AbsPublicController,
+    AbsPlaylistsController,
   ],
   providers: [
     AbsTokenService,

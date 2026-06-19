@@ -33,7 +33,8 @@ function expectHandler(instance: object, method: string): void {
 // §5 Streaming — transcode / HLS
 // ---------------------------------------------------------------------------------------------
 
-describe('GAP §5.1–5.3 — transcode playback (playMethod=2 / HLS)', () => {
+// Deferred to Phase 3 — the approved MVP is direct-play only (no transcode / HLS / stream_reset).
+describe.skip('GAP §5.1–5.3 — transcode playback (playMethod=2 / HLS)', () => {
   function item(): AbsItemRow {
     return {
       id: 3,
@@ -140,7 +141,8 @@ describe('GAP ENDPOINTS §2 — POST /api/items/batch/get', () => {
   });
 });
 
-describe('GAP ENDPOINTS §2 — POST /api/items/:id/play/:episodeId (podcast episode playback)', () => {
+// Deferred — BookOrbit has no podcast/episode model, so podcast episode playback is out of scope.
+describe.skip('GAP ENDPOINTS §2 — POST /api/items/:id/play/:episodeId (podcast episode playback)', () => {
   it('AbsItemsController exposes a play-episode handler', () => {
     const controller = new AbsItemsController({} as never, {} as never, { get: () => tmpdir() } as unknown as ConfigService);
     expectHandler(controller, 'playEpisode');

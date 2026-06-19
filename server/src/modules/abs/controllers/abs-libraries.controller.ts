@@ -47,15 +47,64 @@ export class AbsLibrariesController {
 
   @Get(':id/items')
   async items(@CurrentUser() user: RequestUser, @Param('id') id: string, @Query() query: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.catalogService.listLibraryItems(user, this.requireLibraryId(id), this.parseQuery(query));
+  }
+
+  /** Home-screen shelves. */
+  @Get(':id/personalized')
+  async personalized(@CurrentUser() user: RequestUser, @Param('id') id: string): Promise<Record<string, unknown>[]> {
+    return this.catalogService.personalized(user, this.requireLibraryId(id));
+  }
+
+  /** Valid filter values/ids for the library. */
+  @Get(':id/filterdata')
+  async filterdata(@CurrentUser() user: RequestUser, @Param('id') id: string): Promise<Record<string, unknown>> {
+    return this.catalogService.filterData(user, this.requireLibraryId(id));
+  }
+
+  /** Title/author search within the library. */
+  @Get(':id/search')
+  async search(@CurrentUser() user: RequestUser, @Param('id') id: string, @Query() query: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.catalogService.search(user, this.requireLibraryId(id), query.q ?? '', Math.max(0, toInt(query.limit, 12)));
+  }
+
+  /** Series in the library (paginated). */
+  @Get(':id/series')
+  async series(@CurrentUser() user: RequestUser, @Param('id') id: string, @Query() query: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.catalogService.listSeries(user, this.requireLibraryId(id), this.parseQuery(query));
+  }
+
+  /** User collections, restricted to this library (paginated). */
+  @Get(':id/collections')
+  async collections(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Query() query: Record<string, string>,
+  ): Promise<Record<string, unknown>> {
+    return this.catalogService.listCollections(user, this.requireLibraryId(id), this.parseQuery(query));
+  }
+
+  /** Playlists are not modelled in BookOrbit; return an empty paginated envelope. */
+  @Get(':id/playlists')
+  playlists(@Param('id') id: string): Record<string, unknown> {
+    this.requireLibraryId(id);
+    return { results: [], total: 0, limit: 0, page: 0 };
+  }
+
+  private requireLibraryId(id: string): number {
     const libraryId = decodeAbsId('library', id);
     if (libraryId === null) throw AbsHttpException.notFound();
+    return libraryId;
+  }
 
-    return this.catalogService.listLibraryItems(user, libraryId, {
+  private parseQuery(query: Record<string, string>) {
+    return {
       limit: Math.max(0, toInt(query.limit, 0)),
       page: Math.max(0, toInt(query.page, 0)),
       sort: parseAbsSort(query.sort),
       desc: query.desc === '1',
       minified: query.minified === '1',
-    });
+      filter: query.filter,
+    };
   }
 }

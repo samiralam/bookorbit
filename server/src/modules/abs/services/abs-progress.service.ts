@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq, gt, lt } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { DB } from '../../../db';
@@ -15,6 +15,14 @@ export interface AbsProgressInput {
   /** Total book duration in seconds (falls back to summed file durations). */
   duration?: number;
   /** Explicit finished flag (e.g. "mark as finished" from the client). */
+  isFinished?: boolean;
+}
+
+/** Raw PATCH /me/progress body — `progress` (0..1) is accepted as an alternative to `currentTime`. */
+export interface AbsProgressBody {
+  currentTime?: number;
+  duration?: number;
+  progress?: number;
   isFinished?: boolean;
 }
 
@@ -172,6 +180,67 @@ export class AbsProgressService {
       .where(and(eq(schema.audiobookProgress.userId, userId), eq(schema.audiobookProgress.bookId, bookId)))
       .limit(1);
     return row?.updatedAt ?? null;
+  }
+
+  /** Book ids the user has started but not completed, most-recently-updated first (Continue shelf). */
+  async listInProgressBookIds(userId: number): Promise<number[]> {
+    const rows = await this.db
+      .select({ bookId: schema.audiobookProgress.bookId })
+      .from(schema.audiobookProgress)
+      .where(
+        and(eq(schema.audiobookProgress.userId, userId), gt(schema.audiobookProgress.percentage, 0), lt(schema.audiobookProgress.percentage, 100)),
+      )
+      .orderBy(desc(schema.audiobookProgress.updatedAt));
+    return rows.map((r) => r.bookId);
+  }
+
+  /** Build ABS MediaProgress for a book, resolving the owning library automatically. */
+  async getMediaProgressByBook(userId: number, bookId: number): Promise<Record<string, unknown> | null> {
+    const libraryId = await this.readRepo.libraryIdForBook(bookId);
+    if (libraryId === null) return null;
+    return this.getMediaProgress(userId, bookId, libraryId);
+  }
+
+  /**
+   * Stateless upsert from a raw PATCH /me/progress body. Resolves `currentTime` from `progress`
+   * (0..1) when only the latter is supplied, and looks up the owning library for the finish rule.
+   */
+  async upsertFromBody(userId: number, bookId: number, body: AbsProgressBody): Promise<Record<string, unknown> | null> {
+    const libraryId = await this.readRepo.libraryIdForBook(bookId);
+    if (libraryId === null) return null;
+
+    let currentTime = body.currentTime;
+    if (currentTime === undefined && typeof body.progress === 'number') {
+      const duration =
+        body.duration && body.duration > 0 ? body.duration : AbsProgressService.totalDuration(await this.readRepo.audioFilesByBookId(bookId));
+      currentTime = Math.max(0, Math.min(1, body.progress)) * duration;
+    }
+    if (currentTime === undefined && !body.isFinished) return null;
+
+    return this.upsertFromCurrentTime(userId, bookId, libraryId, {
+      currentTime: currentTime ?? 0,
+      duration: body.duration,
+      isFinished: body.isFinished,
+    });
+  }
+
+  /**
+   * Offline reconciliation merge (REIMPLEMENTATION_GUIDE §7.3): newest `updatedAt` wins. Skips the
+   * upsert when the stored progress is newer than the incoming offline session.
+   */
+  async mergeOfflineProgress(
+    userId: number,
+    bookId: number,
+    input: AbsProgressInput & { updatedAt?: number },
+  ): Promise<{ progressSynced: boolean; mediaProgress: Record<string, unknown> | null }> {
+    const existing = await this.getProgressUpdatedAt(userId, bookId);
+    if (existing && input.updatedAt && existing.getTime() > input.updatedAt) {
+      return { progressSynced: false, mediaProgress: await this.getMediaProgressByBook(userId, bookId) };
+    }
+    const libraryId = await this.readRepo.libraryIdForBook(bookId);
+    if (libraryId === null) return { progressSynced: false, mediaProgress: null };
+    const mediaProgress = await this.upsertFromCurrentTime(userId, bookId, libraryId, input);
+    return { progressSynced: mediaProgress != null, mediaProgress };
   }
 }
 

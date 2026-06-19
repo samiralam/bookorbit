@@ -17,6 +17,10 @@ import { AbsAuthGuard } from '../auth/abs-auth.guard';
 import { AbsCatalogService } from '../services/abs-catalog.service';
 import { AbsPlaybackService, type StartSessionBody } from '../services/abs-playback.service';
 
+interface BatchGetBody {
+  libraryItemIds?: string[];
+}
+
 /** Item detail + cover (REIMPLEMENTATION_GUIDE §5). Cover is unauthenticated (in the ignore list). */
 @Public()
 @UseFilters(AbsExceptionFilter)
@@ -30,6 +34,16 @@ export class AbsItemsController {
     config: ConfigService,
   ) {
     this.appDataPath = config.get<string>('storage.appDataPath')!;
+  }
+
+  /** Fetch many items by id (access-filtered). */
+  @Post('batch/get')
+  @HttpCode(200)
+  @UseGuards(AbsAuthGuard)
+  async batchGet(@CurrentUser() user: RequestUser, @Body() body: BatchGetBody): Promise<Record<string, unknown>> {
+    const bookIds = (body?.libraryItemIds ?? []).map((id) => decodeAbsId('libraryItem', id)).filter((id): id is number => id !== null);
+    const libraryItems = await this.catalogService.getLibraryItemsBatch(user, bookIds);
+    return { libraryItems };
   }
 
   @Get(':id')
