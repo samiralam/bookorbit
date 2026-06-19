@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { type SQL } from 'drizzle-orm';
 
+import { Permission } from '@bookorbit/types';
+
 import type { RequestUser } from '../../../common/types/request-user';
 import { LibraryService } from '../../library/library.service';
 import { AbsHttpException } from '../abs-errors';
@@ -58,6 +60,12 @@ export class AbsCatalogService {
     if (user.isSuperuser) return;
     const accessible = await this.libraryService.findAccessibleLibraryIds(user);
     if (!accessible.includes(libraryId)) throw AbsHttpException.notFound();
+  }
+
+  /** ABS download routes are gated on `canDownload` (ENDPOINTS.md §2 — `jwt+canDownload`). */
+  private assertCanDownload(user: RequestUser): void {
+    if (user.isSuperuser || user.permissions.includes(Permission.LibraryDownload)) return;
+    throw AbsHttpException.forbidden();
   }
 
   /** Decode a `group.base64` browse filter into a SQL predicate (id-based groups carry ABS ids). */
@@ -311,5 +319,33 @@ export class AbsCatalogService {
   /** Audio files for playback (used by the playback service). */
   audioFiles(bookId: number): Promise<AbsAudioFileRow[]> {
     return this.readRepo.audioFilesByBookId(bookId);
+  }
+
+  /**
+   * Resolve a single file for `GET /api/items/:id/file/:fileid/download`. The `fileid` is the audio
+   * file's `ino` (its book-file row id). Enforces library access and the `canDownload` permission.
+   */
+  async getDownloadFile(user: RequestUser, bookId: number, fileId: number): Promise<AbsAudioFileRow> {
+    const file = await this.readRepo.findBookFileById(fileId);
+    if (!file || file.bookId !== bookId) throw AbsHttpException.notFound();
+    const libraryId = await this.readRepo.libraryIdForBook(bookId);
+    if (libraryId === null) throw AbsHttpException.notFound();
+    await this.assertLibraryAccess(user, libraryId);
+    this.assertCanDownload(user);
+    return file;
+  }
+
+  /**
+   * Resolve the content files + title for `GET /api/items/:id/download` (zip of the whole item).
+   * Enforces library access and the `canDownload` permission.
+   */
+  async getDownloadBundle(user: RequestUser, bookId: number): Promise<{ title: string; files: AbsAudioFileRow[] }> {
+    const item = await this.readRepo.findItem(bookId);
+    if (!item || item.status === 'processing') throw AbsHttpException.notFound();
+    await this.assertLibraryAccess(user, item.libraryId);
+    this.assertCanDownload(user);
+    const files = await this.readRepo.audioFilesByBookId(bookId);
+    if (files.length === 0) throw AbsHttpException.notFound();
+    return { title: item.title ?? `item-${bookId}`, files };
   }
 }

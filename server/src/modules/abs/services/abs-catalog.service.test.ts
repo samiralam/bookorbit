@@ -1,5 +1,7 @@
+import { Permission } from '@bookorbit/types';
+
 import type { LibraryService } from '../../library/library.service';
-import type { AbsItemRow, AbsReadRepository } from '../abs-read.repository';
+import type { AbsAudioFileRow, AbsItemRow, AbsReadRepository } from '../abs-read.repository';
 import { makeAbsUser, thrownStatus } from '../__testing__/abs-test-helpers';
 import { AbsCatalogService, parseAbsSort } from './abs-catalog.service';
 import type { AbsProgressService } from './abs-progress.service';
@@ -27,11 +29,18 @@ function item(overrides: Partial<AbsItemRow> = {}): AbsItemRow {
   };
 }
 
+function audioFile(overrides: Partial<AbsAudioFileRow> = {}): AbsAudioFileRow {
+  return { id: 7, bookId: 3, format: 'm4b', sortOrder: 0, durationSeconds: 100, sizeBytes: 1000, absolutePath: '/audio/hobbit.m4b', ...overrides };
+}
+
 interface BuildOpts {
   listItems?: { rows: AbsItemRow[]; total: number };
   findItem?: AbsItemRow | null;
   findItemsByIds?: AbsItemRow[];
   accessibleIds?: number[];
+  findBookFileById?: AbsAudioFileRow | null;
+  libraryIdForBook?: number | null;
+  audioFilesByBookId?: AbsAudioFileRow[];
 }
 
 function build(opts: BuildOpts = {}) {
@@ -43,6 +52,9 @@ function build(opts: BuildOpts = {}) {
     narratorsByBookIds: vi.fn().mockResolvedValue([]),
     seriesByBookIds: vi.fn().mockResolvedValue([]),
     audioFilesByBookIds: vi.fn().mockResolvedValue([]),
+    findBookFileById: vi.fn().mockResolvedValue(opts.findBookFileById === undefined ? audioFile() : opts.findBookFileById),
+    libraryIdForBook: vi.fn().mockResolvedValue(opts.libraryIdForBook === undefined ? 5 : opts.libraryIdForBook),
+    audioFilesByBookId: vi.fn().mockResolvedValue(opts.audioFilesByBookId ?? [audioFile()]),
   } as unknown as AbsReadRepository;
   const progressService = {
     listMediaProgressForUser: vi.fn().mockResolvedValue([]),
@@ -114,5 +126,56 @@ describe('AbsCatalogService#getLibraryItemsBatch', () => {
     const { service } = build({ findItemsByIds: items });
     const result = await service.getLibraryItemsBatch(makeAbsUser({ isSuperuser: true }), [3, 5]);
     expect(result.map((r) => r.id)).toEqual(['li_3', 'li_5']);
+  });
+});
+
+describe('AbsCatalogService#getDownloadFile', () => {
+  const downloader = makeAbsUser({ isSuperuser: false, permissions: [Permission.LibraryDownload] });
+
+  it('returns the file for an authorized downloader', async () => {
+    const { service } = build();
+    const file = await service.getDownloadFile(downloader, 3, 7);
+    expect(file.absolutePath).toBe('/audio/hobbit.m4b');
+  });
+
+  it('404s when the file does not exist', async () => {
+    const { service } = build({ findBookFileById: null });
+    expect(await thrownStatus(() => service.getDownloadFile(downloader, 3, 7))).toBe(404);
+  });
+
+  it('404s when the file belongs to a different book', async () => {
+    const { service } = build({ findBookFileById: audioFile({ bookId: 99 }) });
+    expect(await thrownStatus(() => service.getDownloadFile(downloader, 3, 7))).toBe(404);
+  });
+
+  it('404s when the user cannot access the library', async () => {
+    const { service } = build({ accessibleIds: [99] });
+    expect(await thrownStatus(() => service.getDownloadFile(downloader, 3, 7))).toBe(404);
+  });
+
+  it('403s when the user lacks the download permission', async () => {
+    const { service } = build();
+    expect(await thrownStatus(() => service.getDownloadFile(makeAbsUser({ isSuperuser: false, permissions: [] }), 3, 7))).toBe(403);
+  });
+});
+
+describe('AbsCatalogService#getDownloadBundle', () => {
+  const downloader = makeAbsUser({ isSuperuser: false, permissions: [Permission.LibraryDownload] });
+
+  it('returns the title and content files for an authorized downloader', async () => {
+    const { service } = build();
+    const bundle = await service.getDownloadBundle(downloader, 3);
+    expect(bundle.title).toBe('The Hobbit');
+    expect(bundle.files).toHaveLength(1);
+  });
+
+  it('404s when the item has no content files', async () => {
+    const { service } = build({ audioFilesByBookId: [] });
+    expect(await thrownStatus(() => service.getDownloadBundle(downloader, 3))).toBe(404);
+  });
+
+  it('403s when the user lacks the download permission', async () => {
+    const { service } = build();
+    expect(await thrownStatus(() => service.getDownloadBundle(makeAbsUser({ isSuperuser: false, permissions: [] }), 3))).toBe(403);
   });
 });

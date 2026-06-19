@@ -136,7 +136,7 @@ describe('GAP §7.3 — offline reconciliation (POST /api/session/local-all)', (
 
 describe('GAP ENDPOINTS §2 — POST /api/items/batch/get', () => {
   it('AbsItemsController exposes a batch-get handler (the catalog service method already exists)', () => {
-    const controller = new AbsItemsController({} as never, {} as never, { get: () => tmpdir() } as unknown as ConfigService);
+    const controller = new AbsItemsController({} as never, {} as never, {} as never, { get: () => tmpdir() } as unknown as ConfigService);
     expectHandler(controller, 'batchGet');
   });
 });
@@ -144,7 +144,7 @@ describe('GAP ENDPOINTS §2 — POST /api/items/batch/get', () => {
 // Deferred — BookOrbit has no podcast/episode model, so podcast episode playback is out of scope.
 describe.skip('GAP ENDPOINTS §2 — POST /api/items/:id/play/:episodeId (podcast episode playback)', () => {
   it('AbsItemsController exposes a play-episode handler', () => {
-    const controller = new AbsItemsController({} as never, {} as never, { get: () => tmpdir() } as unknown as ConfigService);
+    const controller = new AbsItemsController({} as never, {} as never, {} as never, { get: () => tmpdir() } as unknown as ConfigService);
     expectHandler(controller, 'playEpisode');
   });
 });
