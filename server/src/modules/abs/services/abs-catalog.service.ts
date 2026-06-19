@@ -336,6 +336,20 @@ export class AbsCatalogService {
   }
 
   /**
+   * Resolve a single file for the inline stream `GET /api/items/:id/file/:fileid` (ENDPOINTS.md §2 —
+   * `jwt`). Mirrors {@link getDownloadFile} but is gated only on library access: the inline route is
+   * for in-app playback/preview and is not subject to the `canDownload` permission.
+   */
+  async getItemFile(user: RequestUser, bookId: number, fileId: number): Promise<AbsAudioFileRow> {
+    const file = await this.readRepo.findBookFileById(fileId);
+    if (!file || file.bookId !== bookId) throw AbsHttpException.notFound();
+    const libraryId = await this.readRepo.libraryIdForBook(bookId);
+    if (libraryId === null) throw AbsHttpException.notFound();
+    await this.assertLibraryAccess(user, libraryId);
+    return file;
+  }
+
+  /**
    * Resolve the content files + title for `GET /api/items/:id/download` (zip of the whole item).
    * Enforces library access and the `canDownload` permission.
    */

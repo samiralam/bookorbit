@@ -13,6 +13,7 @@ import { AbsItemsController } from './abs-items.controller';
 function build() {
   const catalogService = {
     getLibraryItem: vi.fn().mockResolvedValue({ id: 'li_3' }),
+    getItemFile: vi.fn().mockResolvedValue({ id: 7, bookId: 3, format: 'm4b', absolutePath: '/audio/Book Title.m4b' }),
     getDownloadFile: vi.fn().mockResolvedValue({ id: 7, bookId: 3, format: 'm4b', absolutePath: '/audio/Book Title.m4b' }),
     getDownloadBundle: vi.fn().mockResolvedValue({ title: 'Book Title', files: [{ absolutePath: '/audio/Book Title.m4b' }] }),
   } as unknown as AbsCatalogService;
@@ -79,6 +80,29 @@ describe('AbsItemsController#cover', () => {
     const { reply } = makeReply();
     // appDataPath points at an empty tmp dir, so the cover directory does not exist -> 404.
     expect(await thrownStatus(() => controller.cover('li_999999', makeRequest(), reply))).toBe(404);
+  });
+});
+
+describe('AbsItemsController#streamFileInline', () => {
+  it('404s on a malformed item id', async () => {
+    const { controller } = build();
+    const { reply } = makeReply();
+    expect(await thrownStatus(() => controller.streamFileInline(makeAbsUser(), 'nope', '7', makeRequest(), reply))).toBe(404);
+  });
+
+  it('404s on a non-numeric file id', async () => {
+    const { controller } = build();
+    const { reply } = makeReply();
+    expect(await thrownStatus(() => controller.streamFileInline(makeAbsUser(), 'li_3', 'abc', makeRequest(), reply))).toBe(404);
+  });
+
+  it('resolves the file and streams it inline (no attachment disposition)', async () => {
+    const { controller, catalogService, streamService } = build();
+    const { reply, captured } = makeReply();
+    await controller.streamFileInline(makeAbsUser(), 'li_3', '7', makeRequest(), reply);
+    expect(catalogService.getItemFile).toHaveBeenCalledWith(expect.anything(), 3, 7);
+    expect(captured.headers['Content-Disposition']).toBeUndefined();
+    expect(streamService.streamFile).toHaveBeenCalledWith(expect.anything(), reply, '/audio/Book Title.m4b', 'm4b');
   });
 });
 

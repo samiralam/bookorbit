@@ -75,6 +75,28 @@ export class AbsItemsController {
   }
 
   /**
+   * Stream a single item file inline (ENDPOINTS.md §2 — `jwt`). Same resolution as the download
+   * variant but without forcing an attachment disposition, and gated only on library access (not
+   * `canDownload`) since this is the in-app playback/preview path. Range-aware via the stream service.
+   */
+  @Get(':id/file/:fileid')
+  @UseGuards(AbsAuthGuard)
+  async streamFileInline(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Param('fileid') fileid: string,
+    @Req() req: FastifyRequest,
+    @Res() reply: FastifyReply,
+  ): Promise<void> {
+    const bookId = decodeAbsId('libraryItem', id);
+    const fileId = Number.parseInt(fileid, 10);
+    if (bookId === null || !Number.isInteger(fileId)) throw AbsHttpException.notFound();
+
+    const file = await this.catalogService.getItemFile(user, bookId, fileId);
+    await this.streamService.streamFile(req, reply, file.absolutePath, file.format);
+  }
+
+  /**
    * Download a single item file (ENDPOINTS.md §2 — `jwt+canDownload`). `fileid` is the audio file's
    * `ino`. Streamed with HTTP Range support so download managers can resume. Auth accepts `?token=`
    * since download managers cannot set an Authorization header (REIMPLEMENTATION_GUIDE §2.1).

@@ -159,6 +159,29 @@ describe('AbsCatalogService#getDownloadFile', () => {
   });
 });
 
+describe('AbsCatalogService#getItemFile', () => {
+  it('returns the file without requiring the download permission', async () => {
+    const { service } = build();
+    const file = await service.getItemFile(makeAbsUser({ isSuperuser: false, permissions: [] }), 3, 7);
+    expect(file.absolutePath).toBe('/audio/hobbit.m4b');
+  });
+
+  it('404s when the file does not exist', async () => {
+    const { service } = build({ findBookFileById: null });
+    expect(await thrownStatus(() => service.getItemFile(makeAbsUser(), 3, 7))).toBe(404);
+  });
+
+  it('404s when the file belongs to a different book', async () => {
+    const { service } = build({ findBookFileById: audioFile({ bookId: 99 }) });
+    expect(await thrownStatus(() => service.getItemFile(makeAbsUser(), 3, 7))).toBe(404);
+  });
+
+  it('404s when the user cannot access the library', async () => {
+    const { service } = build({ accessibleIds: [99] });
+    expect(await thrownStatus(() => service.getItemFile(makeAbsUser({ isSuperuser: false }), 3, 7))).toBe(404);
+  });
+});
+
 describe('AbsCatalogService#getDownloadBundle', () => {
   const downloader = makeAbsUser({ isSuperuser: false, permissions: [Permission.LibraryDownload] });
 
