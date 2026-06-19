@@ -10,6 +10,7 @@ import { AbsAuthGuard } from './auth/abs-auth.guard';
 import { AbsDiscoveryController } from './auth/abs-discovery.controller';
 import { AbsSessionService } from './auth/abs-session.service';
 import { AbsTokenService } from './auth/abs-token.service';
+import { AbsAuthorizeController } from './controllers/abs-authorize.controller';
 import { AbsItemsController } from './controllers/abs-items.controller';
 import { AbsLibrariesController } from './controllers/abs-libraries.controller';
 import { AbsMeController } from './controllers/abs-me.controller';
@@ -30,6 +31,7 @@ import { AbsStreamService } from './services/abs-stream.service';
   controllers: [
     AbsDiscoveryController,
     AbsAuthController,
+    AbsAuthorizeController,
     AbsMeController,
     AbsLibrariesController,
     AbsItemsController,
