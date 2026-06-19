@@ -136,6 +136,10 @@ export class AbsProgressService {
       progress: isFinished ? 1 : progress,
       isFinished,
       hideFromContinueListening: false,
+      // ABS always emits these (null for audio); strict Codable clients (e.g. Prologue) decode the
+      // whole MediaProgress object and drop the entire item list if a required key is absent.
+      ebookLocation: null,
+      ebookProgress: null,
       lastUpdate: updatedMs,
       startedAt: updatedMs,
       finishedAt: isFinished ? updatedMs : null,

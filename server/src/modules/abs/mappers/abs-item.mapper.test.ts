@@ -66,6 +66,9 @@ describe('toAbsLibraryItem', () => {
     expect(media.audioFiles).toBeUndefined();
     expect(media.numTracks).toBe(2);
     expect(media.duration).toBe(300);
+    // ABS-always-present counts strict clients (Prologue) require to decode the minified media object.
+    expect(media.numMissingParts).toBe(0);
+    expect(media.numInvalidAudioFiles).toBe(0);
   });
 
   it('attaches userMediaProgress only when supplied', () => {

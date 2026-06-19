@@ -144,6 +144,10 @@ export function toAbsLibraryItem(item: AbsItemRow, rel: AbsItemRelations, opts: 
         numTracks,
         numAudioFiles: numTracks,
         numChapters: chapters.length,
+        // ABS always emits these counts (0 here); strict Codable clients (e.g. Prologue) decode the
+        // whole minified media object and drop the entire item list if a required key is absent.
+        numMissingParts: 0,
+        numInvalidAudioFiles: 0,
         duration,
         size,
       }
