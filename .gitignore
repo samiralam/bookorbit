@@ -35,6 +35,9 @@ server/src/metadata.ts
 # Test results (generated artifacts - uploaded to CI, not committed)
 test-results/
 
+# abs-capture-proxy DUMP=1 output (tools/abs-capture-proxy)
+abs-capture/
+
 # IDE
 .idea/
 

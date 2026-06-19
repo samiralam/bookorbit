@@ -48,6 +48,7 @@
     "db:seed": "bash ./scripts/db/seed-baseline.sh",
     "e2e:db:prepare": "bash ./scripts/e2e/prepare-db.sh",
     "e2e:db:migrate": "pnpm --filter server e2e:db:migrate",
+    "abs:capture": "node ./tools/abs-capture-proxy/abs-capture-proxy.mjs",
     "prepare": "husky"
   },
   "engines": {
