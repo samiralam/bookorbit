@@ -4,6 +4,7 @@ import type { AbsSocketGateway } from '../abs-socket.gateway';
 import { makeAbsUser, thrownStatus } from '../__testing__/abs-test-helpers';
 import { AbsPlaybackService } from './abs-playback.service';
 import type { AbsProgressService } from './abs-progress.service';
+import type { AbsTranscodeService } from './abs-transcode.service';
 
 function item(overrides: Partial<AbsItemRow> = {}): AbsItemRow {
   return {
@@ -57,8 +58,12 @@ function build(opts: BuildOpts = {}) {
     emitUserSessionClosed: vi.fn(),
   } as unknown as AbsSocketGateway;
   const libraryService = { findAccessibleLibraryIds: vi.fn().mockResolvedValue(opts.accessibleIds ?? [5]) } as unknown as LibraryService;
-  const service = new AbsPlaybackService(readRepo, progressService, socketGateway, libraryService);
-  return { service, readRepo, progressService, socketGateway };
+  const transcodeService = {
+    createStream: vi.fn().mockResolvedValue('/hls/stream/output.m3u8'),
+    closeStream: vi.fn().mockResolvedValue(undefined),
+  } as unknown as AbsTranscodeService;
+  const service = new AbsPlaybackService(readRepo, progressService, socketGateway, libraryService, transcodeService);
+  return { service, readRepo, progressService, socketGateway, transcodeService };
 }
 
 describe('AbsPlaybackService#startSession', () => {
@@ -85,6 +90,36 @@ describe('AbsPlaybackService#startSession', () => {
     expect(session.libraryItemId).toBe('li_3');
     expect(session.duration).toBe(300);
     expect((session.audioTracks as unknown[]).length).toBe(2);
+  });
+
+  it('returns a transcode session (playMethod 2) with a single HLS track when forced', async () => {
+    const { service, transcodeService } = build();
+    const session = await service.startSession(makeAbsUser(), 3, { forceTranscode: true });
+    expect(session.playMethod).toBe(2);
+    expect((session.audioTracks as unknown[]).length).toBe(1);
+    expect(transcodeService.createStream).toHaveBeenCalledOnce();
+    const track = (session.audioTracks as Record<string, unknown>[])[0];
+    expect(track.contentUrl).toBe(`/hls/${session.id as string}/output.m3u8`);
+  });
+
+  it('transcodes when the client cannot direct-play the files (mime not supported)', async () => {
+    const { service } = build();
+    const session = await service.startSession(makeAbsUser(), 3, { supportedMimeTypes: ['audio/flac'] });
+    expect(session.playMethod).toBe(2);
+  });
+
+  it('direct-plays when the client supports the file mime types', async () => {
+    const { service } = build();
+    const session = await service.startSession(makeAbsUser(), 3, { supportedMimeTypes: ['audio/mpeg'] });
+    expect(session.playMethod).toBe(0);
+  });
+
+  it('closes the transcode stream when a transcode session is closed', async () => {
+    const { service, transcodeService } = build();
+    const user = makeAbsUser({ id: 1 });
+    const started = await service.startSession(user, 3, { forceTranscode: true });
+    await service.close(started.id as string, user);
+    expect(transcodeService.closeStream).toHaveBeenCalledWith(started.id);
   });
 
   it('seeds the resume point from saved progress', async () => {

@@ -13,6 +13,17 @@ export function audioMimeType(format: string | null | undefined): string {
   return MIME_BY_FORMAT[format.toLowerCase()] ?? 'audio/mpeg';
 }
 
+/**
+ * Direct-play eligibility check (REIMPLEMENTATION_GUIDE §5.1, mirrors `checkCanDirectPlay`). Every
+ * audio file's mime type must be in the client's `supportedMimeTypes`; otherwise the session must
+ * transcode. When the client sends no list we default to direct play (BookOrbit divergence — ABS
+ * transcodes on an empty list — to keep the no-negotiation MVP path direct and cheap).
+ */
+export function canDirectPlay(formats: (string | null)[], supportedMimeTypes: string[] | undefined): boolean {
+  if (!supportedMimeTypes || supportedMimeTypes.length === 0) return true;
+  return formats.every((format) => supportedMimeTypes.includes(audioMimeType(format)));
+}
+
 export interface AbsChapter {
   id: number;
   start: number;

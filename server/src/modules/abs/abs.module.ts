@@ -13,6 +13,7 @@ import { AbsDiscoveryController } from './auth/abs-discovery.controller';
 import { AbsSessionService } from './auth/abs-session.service';
 import { AbsTokenService } from './auth/abs-token.service';
 import { AbsAuthorizeController } from './controllers/abs-authorize.controller';
+import { AbsHlsController } from './controllers/abs-hls.controller';
 import { AbsItemsController } from './controllers/abs-items.controller';
 import { AbsLibrariesController } from './controllers/abs-libraries.controller';
 import { AbsMeController } from './controllers/abs-me.controller';
@@ -24,6 +25,7 @@ import { AbsCatalogService } from './services/abs-catalog.service';
 import { AbsPlaybackService } from './services/abs-playback.service';
 import { AbsProgressService } from './services/abs-progress.service';
 import { AbsStreamService } from './services/abs-stream.service';
+import { AbsTranscodeService } from './services/abs-transcode.service';
 
 /**
  * Audiobookshelf-compatible API surface. Self-contained: mounts at the router root (excluded from
@@ -42,6 +44,7 @@ import { AbsStreamService } from './services/abs-stream.service';
     AbsSessionsController,
     AbsPublicController,
     AbsPlaylistsController,
+    AbsHlsController,
   ],
   providers: [
     AbsTokenService,
@@ -52,6 +55,7 @@ import { AbsStreamService } from './services/abs-stream.service';
     AbsCatalogService,
     AbsPlaybackService,
     AbsStreamService,
+    AbsTranscodeService,
     AbsSocketGateway,
     AbsBookmarkService,
     AbsEventBridgeService,

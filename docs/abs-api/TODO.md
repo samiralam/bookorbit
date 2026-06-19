@@ -7,9 +7,9 @@ and the routes actually wired up in `server/src/modules/abs/`. Generated 2026-06
 prioritised. Unmarked rows are admin/server-management routes that may be deferred by design — confirm
 against `REIMPLEMENTATION_GUIDE.md` / `BOOKORBIT_PLANNING_PROMPT.md` before treating as required.
 
-> Status snapshot: ~30/215 routes implemented (the client-critical vertical slice). Controllers present:
+> Status snapshot: ~31/215 routes implemented (the client-critical vertical slice). Controllers present:
 > `abs-libraries`, `abs-items`, `abs-me`, `abs-sessions`, `abs-playlists` (list only), `abs-public`,
-> `abs-authorize`, `auth/abs-auth`, `auth/abs-discovery`.
+> `abs-hls`, `abs-authorize`, `auth/abs-auth`, `auth/abs-discovery`.
 
 ---
 
@@ -19,9 +19,10 @@ These belong to controllers that already exist; the slice is incomplete.
 
 ### Streaming / playback
 
-- [ ] **★ `GET /hls/:stream/:file`** — HLS playlist/segment streaming. No route exists today; only
-      direct-play via `public/session/:id/track/:index` works. (`abs-playback.service.ts` has a
-      `forceTranscode` flag but no HLS router.)
+- [x] **★ `GET /hls/:stream/:file`** — HLS playlist/segment streaming. Implemented: transcode
+      negotiation (`playMethod=2`) in `abs-playback.service.ts`, ffmpeg-backed stream manager in
+      `abs-transcode.service.ts`, route in `abs-hls.controller.ts`, and `stream_reset` socket emit on
+      out-of-window seeks (REIMPLEMENTATION_GUIDE §5.1–5.3).
 - [ ] **★ `POST /items/:id/play/:episodeId`** — podcast-episode playback (book `play` exists, episode variant missing)
 - [ ] **★ `GET /items/:id/file/:fileid`** — inline file stream (only the `/download` variant exists)
 - [ ] **★ public share track** — `GET /public/share/:slug/track/:index` (+ landing/cover/download/progress, see Priority 2 §Shares)

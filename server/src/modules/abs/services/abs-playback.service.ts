@@ -6,13 +6,15 @@ import { LibraryService } from '../../library/library.service';
 import { ABS_MEDIA_TYPE_BOOK, ABS_SERVER_VERSION } from '../abs.constants';
 import { AbsHttpException } from '../abs-errors';
 import { decodeAbsId, encodeAbsId } from '../abs-id.util';
-import { normalizeChapters } from '../abs-media.util';
+import { canDirectPlay, normalizeChapters } from '../abs-media.util';
 import { AbsReadRepository, type AbsAudioFileRow } from '../abs-read.repository';
 import { AbsSocketGateway } from '../abs-socket.gateway';
-import { buildDirectPlayTracks } from '../mappers/abs-item.mapper';
+import { buildDirectPlayTracks, buildTranscodeTrack } from '../mappers/abs-item.mapper';
 import { AbsProgressService } from './abs-progress.service';
+import { AbsTranscodeService } from './abs-transcode.service';
 
 const PLAY_METHOD_DIRECT = 0;
+const PLAY_METHOD_TRANSCODE = 2;
 /** Open sessions with no update for this long are dropped (REIMPLEMENTATION_GUIDE §7.2). */
 const STALE_SESSION_MS = 36 * 60 * 60 * 1000;
 
@@ -30,6 +32,9 @@ interface AbsPlaybackSession {
   audioTracks: Record<string, unknown>[];
   duration: number;
   deviceInfo: Record<string, unknown>;
+  playMethod: number;
+  /** Set for transcode sessions (`playMethod=2`); the HLS stream id (== session id). */
+  streamId: string | null;
   startTime: number;
   currentTime: number;
   timeListening: number;
@@ -62,9 +67,11 @@ export interface LocalSessionBody {
 }
 
 /**
- * In-memory playback-session manager (mirrors ABS `PlaybackSessionManager`). MVP is direct-play
- * only (`playMethod=0`): tracks point at `/public/session/:id/track/:index` and the client seeks via
- * HTTP Range. Progress is persisted to `audiobook_progress` on sync/close.
+ * In-memory playback-session manager (mirrors ABS `PlaybackSessionManager`). Negotiates direct-play
+ * vs transcode (REIMPLEMENTATION_GUIDE §5.1): direct-play (`playMethod=0`) tracks point at
+ * `/public/session/:id/track/:index` and the client seeks via HTTP Range; transcode (`playMethod=2`)
+ * hands off to {@link AbsTranscodeService} for an HLS stream under `/hls/:streamId`. Progress is
+ * persisted to `audiobook_progress` on sync/close.
  */
 @Injectable()
 export class AbsPlaybackService {
@@ -76,6 +83,7 @@ export class AbsPlaybackService {
     private readonly progressService: AbsProgressService,
     private readonly socketGateway: AbsSocketGateway,
     private readonly libraryService: LibraryService,
+    private readonly transcodeService: AbsTranscodeService,
   ) {}
 
   async startSession(user: RequestUser, bookId: number, body: StartSessionBody): Promise<Record<string, unknown>> {
@@ -116,6 +124,25 @@ export class AbsPlaybackService {
       language: item.language ?? null,
     };
 
+    // Direct play unless the client forces transcode or its supportedMimeTypes can't cover the files.
+    const directPlay =
+      body.forceDirectPlay ||
+      (!body.forceTranscode &&
+        canDirectPlay(
+          audioFiles.map((f) => f.format),
+          body.supportedMimeTypes,
+        ));
+
+    let audioTracks: Record<string, unknown>[];
+    let streamId: string | null = null;
+    if (directPlay) {
+      audioTracks = buildDirectPlayTracks(sessionId, audioFiles);
+    } else {
+      streamId = sessionId;
+      await this.transcodeService.createStream({ streamId, userId: user.id, audioFiles, duration, startTime: resumeAt });
+      audioTracks = [buildTranscodeTrack(streamId, duration)];
+    }
+
     const session: AbsPlaybackSession = {
       id: sessionId,
       userId: user.id,
@@ -127,9 +154,11 @@ export class AbsPlaybackService {
       mediaMetadata,
       chapters: normalizeChapters(item.chapters, duration) as unknown as Record<string, unknown>[],
       audioFiles,
-      audioTracks: buildDirectPlayTracks(sessionId, audioFiles),
+      audioTracks,
       duration,
       deviceInfo: { ...(body.deviceInfo ?? {}) },
+      playMethod: directPlay ? PLAY_METHOD_DIRECT : PLAY_METHOD_TRANSCODE,
+      streamId,
       startTime: resumeAt,
       currentTime: resumeAt,
       timeListening: 0,
@@ -179,6 +208,7 @@ export class AbsPlaybackService {
       await this.sync(sessionId, user, body);
     }
     this.sessions.delete(sessionId);
+    if (session.streamId) await this.transcodeService.closeStream(session.streamId);
     this.socketGateway.emitUserSessionClosed(session.userId, sessionId);
   }
 
@@ -231,6 +261,7 @@ export class AbsPlaybackService {
       if (session.userId !== userId) continue;
       if (deviceId && session.deviceId !== deviceId) continue;
       this.sessions.delete(id);
+      if (session.streamId) void this.transcodeService.closeStream(session.streamId);
     }
   }
 
@@ -238,7 +269,10 @@ export class AbsPlaybackService {
   pruneStaleSessions(): void {
     const cutoff = Date.now() - STALE_SESSION_MS;
     for (const [id, session] of this.sessions) {
-      if (session.updatedAt < cutoff) this.sessions.delete(id);
+      if (session.updatedAt < cutoff) {
+        this.sessions.delete(id);
+        if (session.streamId) void this.transcodeService.closeStream(session.streamId);
+      }
     }
   }
 
@@ -258,7 +292,7 @@ export class AbsPlaybackService {
       displayAuthor: session.displayAuthor,
       coverPath: `/metadata/items/${session.bookId}/cover`,
       duration: session.duration,
-      playMethod: PLAY_METHOD_DIRECT,
+      playMethod: session.playMethod,
       mediaPlayer: 'unknown',
       deviceInfo: session.deviceInfo,
       serverVersion: ABS_SERVER_VERSION,

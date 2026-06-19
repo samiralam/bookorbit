@@ -20,6 +20,7 @@ import { AbsItemsController } from './controllers/abs-items.controller';
 import { AbsLibrariesController } from './controllers/abs-libraries.controller';
 import { AbsMeController } from './controllers/abs-me.controller';
 import { AbsPlaybackService } from './services/abs-playback.service';
+import type { AbsTranscodeService } from './services/abs-transcode.service';
 import type { AbsCatalogService } from './services/abs-catalog.service';
 import type { AbsProgressService } from './services/abs-progress.service';
 import { makeAbsUser } from './__testing__/abs-test-helpers';
@@ -33,8 +34,9 @@ function expectHandler(instance: object, method: string): void {
 // §5 Streaming — transcode / HLS
 // ---------------------------------------------------------------------------------------------
 
-// Deferred to Phase 3 — the approved MVP is direct-play only (no transcode / HLS / stream_reset).
-describe.skip('GAP §5.1–5.3 — transcode playback (playMethod=2 / HLS)', () => {
+// Implemented — transcode negotiation, HLS serving (/hls/:stream/:file), and stream_reset are wired
+// up (see abs-transcode.service.ts, abs-hls.controller.ts).
+describe('GAP §5.1–5.3 — transcode playback (playMethod=2 / HLS)', () => {
   function item(): AbsItemRow {
     return {
       id: 3,
@@ -71,7 +73,11 @@ describe.skip('GAP §5.1–5.3 — transcode playback (playMethod=2 / HLS)', () 
     const progressService = { getMediaProgress: vi.fn().mockResolvedValue(null), upsertFromCurrentTime: vi.fn() } as unknown as AbsProgressService;
     const socketGateway = { emitUserItemProgressUpdated: vi.fn(), emitUserSessionClosed: vi.fn() } as unknown as AbsSocketGateway;
     const libraryService = { findAccessibleLibraryIds: vi.fn().mockResolvedValue([5]) } as unknown as LibraryService;
-    return new AbsPlaybackService(readRepo, progressService, socketGateway, libraryService);
+    const transcodeService = {
+      createStream: vi.fn().mockResolvedValue('/hls/s/output.m3u8'),
+      closeStream: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AbsTranscodeService;
+    return new AbsPlaybackService(readRepo, progressService, socketGateway, libraryService, transcodeService);
   }
 
   it('honors forceTranscode by returning a transcode session (playMethod=2) with a single .m3u8 track', async () => {

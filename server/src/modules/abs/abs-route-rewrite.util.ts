@@ -46,6 +46,8 @@ export const ABS_EXCLUDED_ROUTES: string[] = [
   'api/playlists/(.*)',
   // Public (open-session track streaming, shares)
   'public/(.*)',
+  // HLS transcode playlist/segment streaming
+  'hls/(.*)',
 ];
 
 /**

@@ -70,6 +70,14 @@ export class AbsSocketGateway implements OnGatewayConnection {
     this.server?.to(userRoom(userId)).emit('user_session_closed', sessionId);
   }
 
+  /**
+   * The HLS transcoder was re-based after a seek beyond the buffered window (REIMPLEMENTATION_GUIDE
+   * §5.3). The client must restart playback at `startTime`; a client that ignores this "sticks" on seek.
+   */
+  emitStreamReset(userId: number, payload: { streamId: string; startTime: number }): void {
+    this.server?.to(userRoom(userId)).emit('stream_reset', payload);
+  }
+
   // --- Catalog change events (REIMPLEMENTATION_GUIDE §6.3). Broadcast to all authed clients so
   //     they refresh their library/item caches; payloads are ABS LibraryItem / Library shapes. ---
 

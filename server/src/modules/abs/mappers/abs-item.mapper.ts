@@ -117,6 +117,24 @@ export function buildDirectPlayTracks(sessionId: string, audioFiles: AbsAudioFil
   });
 }
 
+/**
+ * Build the single synthetic AudioTrack for a transcode session (playMethod=2). `contentUrl` is the
+ * HLS playlist under `/hls/:streamId`; the client plays the whole book as one stream
+ * (REIMPLEMENTATION_GUIDE §5.2).
+ */
+export function buildTranscodeTrack(streamId: string, duration: number): Record<string, unknown> {
+  return {
+    index: 0,
+    startOffset: 0,
+    duration,
+    title: `${streamId}.m3u8`,
+    contentUrl: `/hls/${streamId}/output.m3u8`,
+    mimeType: 'application/vnd.apple.mpegurl',
+    codec: 'aac',
+    metadata: null,
+  };
+}
+
 export interface ToAbsLibraryItemOptions {
   minified?: boolean;
   /** ABS MediaProgress for the current user, attached as userMediaProgress when present. */

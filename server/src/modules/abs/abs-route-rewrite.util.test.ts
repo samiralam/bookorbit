@@ -35,6 +35,7 @@ describe('isAbsRoute', () => {
     expect(isAbsRoute('/api/me')).toBe(true);
     expect(isAbsRoute('/api/me/listening-sessions')).toBe(true);
     expect(isAbsRoute('/public/session/abc/track/0')).toBe(true);
+    expect(isAbsRoute('/hls/abc/output-3.ts')).toBe(true);
   });
 
   it('ignores the query string when matching', () => {
