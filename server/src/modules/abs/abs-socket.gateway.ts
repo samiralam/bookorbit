@@ -10,6 +10,9 @@ function userRoom(userId: number): string {
   return `abs:user:${userId}`;
 }
 
+/** All authenticated ABS sockets; targets the contract's `emitter` (all authed clients) fan-out. */
+const AUTHED_ROOM = 'abs:authed';
+
 /**
  * Audiobookshelf Socket.IO contract (REIMPLEMENTATION_GUIDE §6). Unlike BookOrbit's namespaced
  * gateways (which authenticate via the connection handshake), ABS clients connect to the default
@@ -45,6 +48,7 @@ export class AbsSocketGateway implements OnGatewayConnection {
     }
 
     await client.join(userRoom(user.id));
+    await client.join(AUTHED_ROOM);
     client.emit('init', { userId: encodeAbsId('user', user.id), username: user.username, usersOnline: [] });
     this.logger.debug(`[abs.socket] userId=${user.id} socketId=${client.id} authenticated`);
   }
@@ -64,5 +68,40 @@ export class AbsSocketGateway implements OnGatewayConnection {
 
   emitUserSessionClosed(userId: number, sessionId: string): void {
     this.server?.to(userRoom(userId)).emit('user_session_closed', sessionId);
+  }
+
+  // --- Catalog change events (REIMPLEMENTATION_GUIDE §6.3). Broadcast to all authed clients so
+  //     they refresh their library/item caches; payloads are ABS LibraryItem / Library shapes. ---
+
+  emitItemAdded(item: Record<string, unknown>): void {
+    this.server?.to(AUTHED_ROOM).emit('item_added', item);
+  }
+
+  emitItemUpdated(item: Record<string, unknown>): void {
+    this.server?.to(AUTHED_ROOM).emit('item_updated', item);
+  }
+
+  emitItemRemoved(item: Record<string, unknown>): void {
+    this.server?.to(AUTHED_ROOM).emit('item_removed', item);
+  }
+
+  emitItemsAdded(items: Record<string, unknown>[]): void {
+    this.server?.to(AUTHED_ROOM).emit('items_added', items);
+  }
+
+  emitItemsUpdated(items: Record<string, unknown>[]): void {
+    this.server?.to(AUTHED_ROOM).emit('items_updated', items);
+  }
+
+  emitLibraryAdded(library: Record<string, unknown>): void {
+    this.server?.to(AUTHED_ROOM).emit('library_added', library);
+  }
+
+  emitLibraryUpdated(library: Record<string, unknown>): void {
+    this.server?.to(AUTHED_ROOM).emit('library_updated', library);
+  }
+
+  emitLibraryRemoved(library: Record<string, unknown>): void {
+    this.server?.to(AUTHED_ROOM).emit('library_removed', library);
   }
 }

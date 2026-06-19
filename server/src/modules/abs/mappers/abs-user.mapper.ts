@@ -7,6 +7,8 @@ import { encodeAbsId } from '../abs-id.util';
 export interface AbsUserExtras {
   /** Pre-mapped ABS MediaProgress objects (empty until the progress service populates them). */
   mediaProgress?: Record<string, unknown>[];
+  /** Pre-mapped ABS AudioBookmark objects. */
+  bookmarks?: Record<string, unknown>[];
   /** ABS library id strings the user can access; empty array means "all". */
   librariesAccessible?: string[];
   accessToken?: string;
@@ -50,7 +52,7 @@ export function toAbsUser(user: RequestUser, extras: AbsUserExtras = {}): Record
     refreshToken: extras.refreshToken ?? null,
     mediaProgress: extras.mediaProgress ?? [],
     seriesHideFromContinueListening: [],
-    bookmarks: [],
+    bookmarks: extras.bookmarks ?? [],
     isActive: user.active,
     isLocked: false,
     lastSeen: Date.now(),

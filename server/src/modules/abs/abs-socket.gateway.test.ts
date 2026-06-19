@@ -33,11 +33,12 @@ describe('AbsSocketGateway#handleAuth', () => {
     expect(client.emit).toHaveBeenCalledWith('auth_failed', { message: 'Invalid user' });
   });
 
-  it('joins the user room and emits init on a valid token', async () => {
+  it('joins the user room + the authed-broadcast room and emits init on a valid token', async () => {
     const { gateway } = build({ payload: { userId: 8, username: 'admin' }, user: makeAbsUser({ id: 8, username: 'admin' }) });
     const client = makeClient();
     await gateway.handleAuth(client, 'tok');
     expect(client.join).toHaveBeenCalledWith('abs:user:8');
+    expect(client.join).toHaveBeenCalledWith('abs:authed');
     expect(client.emit).toHaveBeenCalledWith('init', { userId: 'usr_8', username: 'admin', usersOnline: [] });
   });
 });
@@ -68,5 +69,30 @@ describe('AbsSocketGateway server-emitted events', () => {
     gateway.server = { to: vi.fn().mockReturnValue({ emit }) } as any;
     gateway.emitUserSessionClosed(8, 'sess-1');
     expect(emit).toHaveBeenCalledWith('user_session_closed', 'sess-1');
+  });
+});
+
+describe('AbsSocketGateway catalog-change events', () => {
+  function withGateway() {
+    const { gateway } = build();
+    const emit = vi.fn();
+    gateway.server = { to: vi.fn().mockReturnValue({ emit }) } as any;
+    return { gateway, emit, to: gateway.server.to as any };
+  }
+
+  it('broadcasts library_updated to the authed room', () => {
+    const { gateway, emit, to } = withGateway();
+    const library = { id: 'lib_5', name: 'Audiobooks' };
+    gateway.emitLibraryUpdated(library);
+    expect(to).toHaveBeenCalledWith('abs:authed');
+    expect(emit).toHaveBeenCalledWith('library_updated', library);
+  });
+
+  it('broadcasts item_added and items_updated to the authed room', () => {
+    const { gateway, emit } = withGateway();
+    gateway.emitItemAdded({ id: 'li_1' });
+    gateway.emitItemsUpdated([{ id: 'li_1' }, { id: 'li_2' }]);
+    expect(emit).toHaveBeenCalledWith('item_added', { id: 'li_1' });
+    expect(emit).toHaveBeenCalledWith('items_updated', [{ id: 'li_1' }, { id: 'li_2' }]);
   });
 });
