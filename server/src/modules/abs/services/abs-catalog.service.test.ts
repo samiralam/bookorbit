@@ -41,6 +41,9 @@ interface BuildOpts {
   findBookFileById?: AbsAudioFileRow | null;
   libraryIdForBook?: number | null;
   audioFilesByBookId?: AbsAudioFileRow[];
+  authorsInLibrary?: { id: number; name: string; description: string | null; numBooks: number }[];
+  findAuthor?: { id: number; name: string; description: string | null } | null;
+  bookIdsForAuthor?: number[];
 }
 
 function build(opts: BuildOpts = {}) {
@@ -55,6 +58,9 @@ function build(opts: BuildOpts = {}) {
     findBookFileById: vi.fn().mockResolvedValue(opts.findBookFileById === undefined ? audioFile() : opts.findBookFileById),
     libraryIdForBook: vi.fn().mockResolvedValue(opts.libraryIdForBook === undefined ? 5 : opts.libraryIdForBook),
     audioFilesByBookId: vi.fn().mockResolvedValue(opts.audioFilesByBookId ?? [audioFile()]),
+    authorsInLibrary: vi.fn().mockResolvedValue(opts.authorsInLibrary ?? []),
+    findAuthor: vi.fn().mockResolvedValue(opts.findAuthor === undefined ? { id: 1, name: 'Andy Weir', description: null } : opts.findAuthor),
+    bookIdsForAuthor: vi.fn().mockResolvedValue(opts.bookIdsForAuthor ?? []),
   } as unknown as AbsReadRepository;
   const progressService = {
     listMediaProgressForUser: vi.fn().mockResolvedValue([]),
@@ -126,6 +132,48 @@ describe('AbsCatalogService#getLibraryItemsBatch', () => {
     const { service } = build({ findItemsByIds: items });
     const result = await service.getLibraryItemsBatch(makeAbsUser({ isSuperuser: true }), [3, 5]);
     expect(result.map((r) => r.id)).toEqual(['li_3', 'li_5']);
+  });
+});
+
+describe('AbsCatalogService#listAuthors', () => {
+  it('404s when a scoped user cannot access the library', async () => {
+    const { service } = build({ accessibleIds: [99] });
+    expect(await thrownStatus(() => service.listAuthors(makeAbsUser({ isSuperuser: false }), 5))).toBe(404);
+  });
+
+  it('returns the ABS authors envelope with encoded ids and book counts', async () => {
+    const { service } = build({
+      authorsInLibrary: [{ id: 1, name: 'Andy Weir', description: 'bio', numBooks: 2 }],
+    });
+    const result = await service.listAuthors(makeAbsUser(), 5);
+    expect(result).toEqual({ authors: [expect.objectContaining({ id: 'aut_1', name: 'Andy Weir', numBooks: 2 })] });
+  });
+});
+
+describe('AbsCatalogService#getAuthor', () => {
+  it('404s when the author does not exist', async () => {
+    const { service } = build({ findAuthor: null });
+    expect(await thrownStatus(() => service.getAuthor(makeAbsUser(), 1, []))).toBe(404);
+  });
+
+  it('returns the bare author when items are not requested', async () => {
+    const { service, readRepo } = build();
+    const result = await service.getAuthor(makeAbsUser(), 1, []);
+    expect(result).toMatchObject({ id: 'aut_1', name: 'Andy Weir' });
+    expect(result.libraryItems).toBeUndefined();
+    expect(readRepo.bookIdsForAuthor).not.toHaveBeenCalled();
+  });
+
+  it('eager-loads access-filtered items and recomputes numBooks when include=items', async () => {
+    const { service } = build({
+      bookIdsForAuthor: [3, 5],
+      findItemsByIds: [item({ id: 3, libraryId: 5 }), item({ id: 5, libraryId: 99 })],
+      accessibleIds: [5],
+    });
+    const result = await service.getAuthor(makeAbsUser({ isSuperuser: false }), 1, ['items']);
+    const items = result.libraryItems as { id: string }[];
+    expect(items.map((i) => i.id)).toEqual(['li_3']);
+    expect(result.numBooks).toBe(1);
   });
 });
 

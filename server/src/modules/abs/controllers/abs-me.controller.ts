@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, UseFilters, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UseFilters, UseGuards } from '@nestjs/common';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { Public } from '../../../common/decorators/public.decorator';
@@ -50,6 +50,20 @@ export class AbsMeController {
   async itemsInProgress(@CurrentUser() user: RequestUser): Promise<Record<string, unknown>> {
     const libraryItems = await this.catalogService.itemsInProgress(user);
     return { libraryItems };
+  }
+
+  /**
+   * Paginated listening history (REIMPLEMENTATION_GUIDE §8). BookOrbit does not retain ABS-shaped
+   * historical sessions, so this returns an empty page in the ABS envelope — enough for clients
+   * (e.g. Prologue) that probe it on connect and render a "History" tab.
+   */
+  @Get('listening-sessions')
+  listeningSessions(@Query() query: Record<string, string>): Record<string, unknown> {
+    const parsed = Number.parseInt(query.itemsPerPage ?? '', 10);
+    const itemsPerPage = Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
+    const parsedPage = Number.parseInt(query.page ?? '', 10);
+    const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 0;
+    return { total: 0, numPages: 0, page, itemsPerPage, sessions: [] };
   }
 
   /** Read one MediaProgress; 404 when there is none. Episode segment is ignored (no podcasts). */

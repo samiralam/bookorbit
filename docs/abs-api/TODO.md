@@ -71,7 +71,7 @@ These belong to controllers that already exist; the slice is incomplete.
 
 ### Current user (`/me`)
 
-- [ ] `GET /me/listening-sessions`
+- [x] `GET /me/listening-sessions` — returns an empty ABS history page (BookOrbit keeps no ABS-shaped session history); satisfies clients (e.g. Prologue) that probe it on connect
 - [ ] `GET /me/item/listening-sessions/:libraryItemId/:episodeId?`
 - [ ] `GET /me/listening-stats`
 - [ ] `GET /me/progress/:id/remove-from-continue-listening`
@@ -95,7 +95,8 @@ These belong to controllers that already exist; the slice is incomplete.
 - [ ] `GET /libraries/:id/episode-downloads`
 - [ ] `GET /libraries/:id/series/:seriesId`
 - [ ] `GET /libraries/:id/stats`
-- [ ] `GET /libraries/:id/authors`, `GET /libraries/:id/narrators`, `PATCH`/`DELETE /libraries/:id/narrators/:narratorId`
+- [x] `GET /libraries/:id/authors` — authors with in-library book counts (primary browse axis for author-centric clients, e.g. Prologue)
+- [ ] `GET /libraries/:id/narrators`, `PATCH`/`DELETE /libraries/:id/narrators/:narratorId`
 - [ ] `GET /libraries/:id/matchall`, `POST /libraries/:id/scan`
 - [ ] `GET /libraries/:id/opml`, `GET /libraries/:id/podcast-titles`
 - [ ] `POST /libraries/order`, `POST /libraries/:id/remove-metadata`
@@ -115,7 +116,7 @@ These belong to controllers that already exist; the slice is incomplete.
 Each is a whole domain with zero routes today.
 
 - [ ] **Collections** (`/api/collections`) — 9 routes (CRUD + book add/remove + batch)
-- [ ] **Authors** (`/api/authors`) — 7 routes (get/update/delete, match, image get/upload/delete)
+- [~] **Authors** (`/api/authors`) — `GET /authors/:id` (with `?include=items,series`) implemented; remaining: update/delete, match, image get/upload/delete
 - [ ] **Series** standalone (`/api/series`) — 2 routes (get one, update)
 - [ ] **Podcasts** (`/api/podcasts`) — 13 routes (feed parse, OPML, episodes, downloads, match)
 - [ ] **Users** (`/api/users`, admin) — 9 routes

@@ -13,6 +13,7 @@ import { AbsDiscoveryController } from './auth/abs-discovery.controller';
 import { AbsSessionService } from './auth/abs-session.service';
 import { AbsTokenService } from './auth/abs-token.service';
 import { AbsAuthorizeController } from './controllers/abs-authorize.controller';
+import { AbsAuthorsController } from './controllers/abs-authors.controller';
 import { AbsHlsController } from './controllers/abs-hls.controller';
 import { AbsItemsController } from './controllers/abs-items.controller';
 import { AbsLibrariesController } from './controllers/abs-libraries.controller';
@@ -41,6 +42,7 @@ import { AbsTranscodeService } from './services/abs-transcode.service';
     AbsMeController,
     AbsLibrariesController,
     AbsItemsController,
+    AbsAuthorsController,
     AbsSessionsController,
     AbsPublicController,
     AbsPlaylistsController,

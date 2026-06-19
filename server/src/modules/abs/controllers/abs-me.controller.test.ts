@@ -13,6 +13,24 @@ function build(progress: Record<string, unknown>[], accessibleIds: number[]) {
   return { controller: new AbsMeController(progressService, libraryService, catalogService, bookmarkService), progressService };
 }
 
+describe('AbsMeController#listeningSessions', () => {
+  it('returns an empty ABS history page echoing pagination params', () => {
+    const { controller } = build([], []);
+    expect(controller.listeningSessions({ page: '2', itemsPerPage: '25' })).toEqual({
+      total: 0,
+      numPages: 0,
+      page: 2,
+      itemsPerPage: 25,
+      sessions: [],
+    });
+  });
+
+  it('defaults to page 0 / itemsPerPage 10 when params are missing or invalid', () => {
+    const { controller } = build([], []);
+    expect(controller.listeningSessions({})).toMatchObject({ page: 0, itemsPerPage: 10, sessions: [] });
+  });
+});
+
 describe('AbsMeController#me', () => {
   it('returns the current user with their media progress', async () => {
     const { controller, progressService } = build([{ id: 'mp1' }], [3]);

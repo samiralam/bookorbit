@@ -15,7 +15,10 @@ function build(opts: BuildOpts = {}) {
     findAccessibleLibraryIds: vi.fn().mockResolvedValue(opts.accessibleIds ?? []),
     findOne: vi.fn().mockResolvedValue(opts.findOne ?? null),
   } as unknown as LibraryService;
-  const catalogService = { listLibraryItems: vi.fn().mockResolvedValue({ results: [], total: 0 }) } as unknown as AbsCatalogService;
+  const catalogService = {
+    listLibraryItems: vi.fn().mockResolvedValue({ results: [], total: 0 }),
+    listAuthors: vi.fn().mockResolvedValue({ authors: [] }),
+  } as unknown as AbsCatalogService;
   return { controller: new AbsLibrariesController(libraryService, catalogService), libraryService, catalogService };
 }
 
@@ -80,5 +83,19 @@ describe('AbsLibrariesController#items', () => {
       desc: false,
       minified: false,
     });
+  });
+});
+
+describe('AbsLibrariesController#authors', () => {
+  it('404s on a malformed library id', async () => {
+    const { controller } = build();
+    expect(await thrownStatus(() => controller.authors(makeAbsUser(), 'bogus'))).toBe(404);
+  });
+
+  it('delegates to the catalog service with the decoded library id', async () => {
+    const { controller, catalogService } = build();
+    const result = await controller.authors(makeAbsUser(), 'lib_5');
+    expect(catalogService.listAuthors).toHaveBeenCalledWith(expect.anything(), 5);
+    expect(result).toEqual({ authors: [] });
   });
 });

@@ -343,6 +343,48 @@ export class AbsReadRepository {
     return [...byId.values()];
   }
 
+  /** Authors with at least one present book in the library, with their in-library book count. */
+  async authorsInLibrary(libraryId: number): Promise<{ id: number; name: string; description: string | null; numBooks: number }[]> {
+    const bookIdsForLibrary = this.db
+      .select({ id: schema.books.id })
+      .from(schema.books)
+      .where(and(eq(schema.books.libraryId, libraryId), sql`${schema.books.status} <> 'processing'`));
+
+    return this.db
+      .select({
+        id: schema.authors.id,
+        name: schema.authors.name,
+        description: schema.authors.description,
+        numBooks: sql<number>`count(${schema.bookAuthors.bookId})`.mapWith(Number),
+      })
+      .from(schema.authors)
+      .innerJoin(schema.bookAuthors, eq(schema.bookAuthors.authorId, schema.authors.id))
+      .where(inArray(schema.bookAuthors.bookId, bookIdsForLibrary))
+      .groupBy(schema.authors.id)
+      .orderBy(asc(schema.authors.name));
+  }
+
+  async findAuthor(authorId: number): Promise<{ id: number; name: string; description: string | null } | null> {
+    const [row] = await this.db
+      .select({ id: schema.authors.id, name: schema.authors.name, description: schema.authors.description })
+      .from(schema.authors)
+      .where(eq(schema.authors.id, authorId))
+      .limit(1);
+    return row ?? null;
+  }
+
+  /** Present book ids written by an author, ordered by title for stable author-page display. */
+  async bookIdsForAuthor(authorId: number): Promise<number[]> {
+    const rows = await this.db
+      .select({ id: schema.books.id })
+      .from(schema.bookAuthors)
+      .innerJoin(schema.books, eq(schema.books.id, schema.bookAuthors.bookId))
+      .leftJoin(schema.bookMetadata, eq(schema.bookMetadata.bookId, schema.books.id))
+      .where(and(eq(schema.bookAuthors.authorId, authorId), sql`${schema.books.status} <> 'processing'`))
+      .orderBy(asc(schema.bookMetadata.title), asc(schema.books.id));
+    return rows.map((r) => r.id);
+  }
+
   /** A user's collections, restricted to books in the given library, with member book ids. */
   async collectionsForUser(
     userId: number,

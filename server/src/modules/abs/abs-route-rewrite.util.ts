@@ -37,6 +37,8 @@ export const ABS_EXCLUDED_ROUTES: string[] = [
   'api/libraries/(.*)',
   'api/items',
   'api/items/(.*)',
+  'api/authors',
+  'api/authors/(.*)',
   'api/session',
   'api/session/(.*)',
   'api/sessions',

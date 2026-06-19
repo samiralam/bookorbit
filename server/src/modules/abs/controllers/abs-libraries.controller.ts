@@ -56,6 +56,12 @@ export class AbsLibrariesController {
     return this.catalogService.personalized(user, this.requireLibraryId(id));
   }
 
+  /** Authors with a book in the library — the primary browse axis for author-centric clients. */
+  @Get(':id/authors')
+  async authors(@CurrentUser() user: RequestUser, @Param('id') id: string): Promise<Record<string, unknown>> {
+    return this.catalogService.listAuthors(user, this.requireLibraryId(id));
+  }
+
   /** Valid filter values/ids for the library. */
   @Get(':id/filterdata')
   async filterdata(@CurrentUser() user: RequestUser, @Param('id') id: string): Promise<Record<string, unknown>> {

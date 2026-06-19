@@ -9,6 +9,7 @@ import { AbsHttpException } from '../abs-errors';
 import { decodeAbsFilter } from '../abs-filter.util';
 import { decodeAbsId, encodeAbsId } from '../abs-id.util';
 import { AbsReadRepository, type AbsAudioFileRow, type AbsItemRow, type AbsItemSortField } from '../abs-read.repository';
+import { toAbsAuthor } from '../mappers/abs-author.mapper';
 import { toAbsLibraryItem, type AbsItemRelations } from '../mappers/abs-item.mapper';
 import { AbsProgressService } from './abs-progress.service';
 
@@ -37,6 +38,28 @@ function groupBy<T, K>(items: T[], keyFn: (item: T) => K): Map<K, T[]> {
 function orderByIds(rows: AbsItemRow[], order: number[]): AbsItemRow[] {
   const byId = new Map(rows.map((r) => [r.id, r]));
   return order.map((id) => byId.get(id)).filter((r): r is AbsItemRow => r != null);
+}
+
+/**
+ * Group an author's already-assembled LibraryItems by the series they belong to, mirroring ABS's
+ * `AuthorController` `include=series` shape (`{ id, name, items }`). Series come off each item's
+ * mapped `media.metadata.series` so we don't re-query.
+ */
+function buildAuthorSeries(items: Record<string, unknown>[]): Record<string, unknown>[] {
+  const byId = new Map<string, { id: string; name: string; items: Record<string, unknown>[] }>();
+  for (const item of items) {
+    const metadata = (item.media as Record<string, unknown> | undefined)?.metadata as Record<string, unknown> | undefined;
+    const series = (metadata?.series as { id: string; name: string }[] | undefined) ?? [];
+    for (const s of series) {
+      let entry = byId.get(s.id);
+      if (!entry) {
+        entry = { id: s.id, name: s.name, items: [] };
+        byId.set(s.id, entry);
+      }
+      entry.items.push(item);
+    }
+  }
+  return [...byId.values()];
 }
 
 /** Maps ABS sort query strings to the columns the read repository can order by. */
@@ -255,6 +278,29 @@ export class AbsCatalogService {
       languages: data.languages,
       publishers: [],
     };
+  }
+
+  /** `GET /api/libraries/:id/authors` — authors with a book in the library (author-centric clients). */
+  async listAuthors(user: RequestUser, libraryId: number): Promise<Record<string, unknown>> {
+    await this.assertLibraryAccess(user, libraryId);
+    const authors = await this.readRepo.authorsInLibrary(libraryId);
+    return { authors: authors.map(toAbsAuthor) };
+  }
+
+  /** `GET /api/authors/:id` — one author; `?include=items,series` eager-loads the author's books. */
+  async getAuthor(user: RequestUser, authorId: number, include: string[]): Promise<Record<string, unknown>> {
+    const author = await this.readRepo.findAuthor(authorId);
+    if (!author) throw AbsHttpException.notFound();
+
+    const result = toAbsAuthor(author);
+    if (include.includes('items')) {
+      const bookIds = await this.readRepo.bookIdsForAuthor(authorId);
+      const libraryItems = await this.itemsForBookIds(user, bookIds, true);
+      result.numBooks = libraryItems.length;
+      if (include.includes('series')) result.series = buildAuthorSeries(libraryItems);
+      result.libraryItems = libraryItems;
+    }
+    return result;
   }
 
   /** `GET /api/libraries/:id/personalized` — home-screen shelves. */
