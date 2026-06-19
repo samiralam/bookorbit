@@ -14,6 +14,16 @@ describe('toAbsUser', () => {
     expect(toAbsUser(makeAbsUser({ isSuperuser: false })).type).toBe('user');
   });
 
+  it('emits the full ABS user contract strict clients require (email/isOldToken/itemTagsSelected/hasOpenIDLink)', () => {
+    const u = toAbsUser(makeAbsUser({ email: 'a@b.c' }));
+    expect(u.email).toBe('a@b.c');
+    expect(u.isOldToken).toBe(false);
+    expect(u.hasOpenIDLink).toBe(false);
+    // ABS names this `itemTagsSelected`, not `itemTagsAccessible`
+    expect(u.itemTagsSelected).toEqual([]);
+    expect(u).not.toHaveProperty('itemTagsAccessible');
+  });
+
   it('emits the access token in both `token` (legacy) and `accessToken`; refresh defaults to null', () => {
     const u = toAbsUser(makeAbsUser(), { accessToken: 'acc' });
     expect(u.token).toBe('acc');
@@ -65,5 +75,9 @@ describe('toAbsLoginPayload', () => {
 describe('buildAbsServerSettings', () => {
   it('advertises the ABS server version this adapter targets', () => {
     expect(buildAbsServerSettings().version).toBe(ABS_SERVER_VERSION);
+  });
+
+  it('reports only local auth via authActiveAuthMethods (required by strict clients)', () => {
+    expect(buildAbsServerSettings().authActiveAuthMethods).toEqual(['local']);
   });
 });

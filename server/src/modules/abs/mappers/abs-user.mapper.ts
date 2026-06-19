@@ -46,8 +46,11 @@ export function toAbsUser(user: RequestUser, extras: AbsUserExtras = {}): Record
   return {
     id: encodeAbsId('user', user.id),
     username: user.username,
+    email: user.email, // ABS sends this (nullable); strict clients (e.g. Prologue) require the key
     type: absUserType(user),
     token: extras.accessToken ?? null, // legacy field; old clients read user.token
+    // ABS sets this flag in jwtAuthCheck to flag pre-2.26 tokens; we never issue old tokens.
+    isOldToken: false,
     accessToken: extras.accessToken,
     refreshToken: extras.refreshToken ?? null,
     mediaProgress: extras.mediaProgress ?? [],
@@ -59,22 +62,34 @@ export function toAbsUser(user: RequestUser, extras: AbsUserExtras = {}): Record
     createdAt: Date.now(),
     permissions: absPermissions(user),
     librariesAccessible: accessAllLibraries ? [] : (extras.librariesAccessible ?? []),
-    itemTagsAccessible: [],
+    // ABS calls this `itemTagsSelected` (not `itemTagsAccessible`); BookOrbit has no per-tag ACLs.
+    itemTagsSelected: [],
+    hasOpenIDLink: false, // BookOrbit has no OIDC linking; ABS always emits this boolean
   };
 }
 
-/** Minimal but structurally-correct ServerSettings for clients that read a handful of fields. */
+/**
+ * Structurally-complete ServerSettings mirroring ABS `ServerSettings.toJSONForBrowser()`
+ * (v2.35.1). The full field set matters: strict clients (e.g. Prologue) decode this object with a
+ * non-optional model, so an omitted key — notably `authActiveAuthMethods` — fails the whole login
+ * decode. We keep the secret-bearing OIDC fields ABS strips in `toJSONForBrowser` out, and report
+ * only `local` auth since BookOrbit has no OIDC flow.
+ */
 export function buildAbsServerSettings(): Record<string, unknown> {
   return {
     id: 'server-settings',
     scannerFindCovers: false,
     scannerCoverProvider: 'google',
     scannerParseSubtitle: false,
+    scannerPreferMatchedMetadata: false,
+    scannerDisableWatcher: true,
     storeCoverWithItem: false,
     storeMetadataWithItem: false,
     metadataFileFormat: 'json',
     rateLimitLoginRequests: 10,
     rateLimitLoginWindow: 600000,
+    allowIframe: false,
+    backupPath: '/metadata/backups',
     backupSchedule: false,
     backupsToKeep: 2,
     maxBackupSize: 1,
@@ -82,14 +97,31 @@ export function buildAbsServerSettings(): Record<string, unknown> {
     loggerScannerLogsToKeep: 2,
     homeBookshelfView: 1,
     bookshelfView: 1,
+    podcastEpisodeSchedule: '0 * * * *',
     sortingIgnorePrefix: false,
     sortingPrefixes: ['the', 'a'],
     chromecastEnabled: false,
     dateFormat: 'MM/dd/yyyy',
     timeFormat: 'HH:mm',
     language: ABS_DEFAULT_LANGUAGE,
+    allowedOrigins: [],
     logLevel: 2,
     version: ABS_SERVER_VERSION,
+    buildNumber: 0,
+    authLoginCustomMessage: null,
+    authActiveAuthMethods: ['local'],
+    authOpenIDIssuerURL: null,
+    authOpenIDAuthorizationURL: null,
+    authOpenIDTokenURL: null,
+    authOpenIDUserInfoURL: null,
+    authOpenIDJwksURL: null,
+    authOpenIDLogoutURL: null,
+    authOpenIDTokenSigningAlgorithm: 'RS256',
+    authOpenIDButtonText: 'Login with OpenId',
+    authOpenIDAutoLaunch: false,
+    authOpenIDAutoRegister: false,
+    authOpenIDMatchExistingBy: null,
+    authOpenIDSubfolderForRedirectURLs: null,
   };
 }
 
