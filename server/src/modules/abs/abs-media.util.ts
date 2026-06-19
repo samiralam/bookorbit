@@ -20,17 +20,29 @@ export interface AbsChapter {
   title: string;
 }
 
-/** Normalize whatever is stored in bookMetadata.chapters into the ABS chapter shape. */
+/**
+ * Normalize whatever is stored in bookMetadata.chapters into the ABS chapter shape.
+ *
+ * Stored chapters are `AudiobookChapter` ({ title, startMs }) — only a start offset in
+ * milliseconds. ABS chapters need start/end in seconds, so we convert startMs and derive
+ * each chapter's end from the next chapter's start (the last chapter ends at the book
+ * duration). A legacy `start`/`end` (seconds) shape is still honored if present.
+ */
 export function normalizeChapters(raw: unknown, fallbackDuration: number): AbsChapter[] {
   if (!Array.isArray(raw)) return [];
-  const chapters: AbsChapter[] = [];
+  const parsed: { start: number; end: number | null; title: string }[] = [];
   raw.forEach((entry, index) => {
     if (!entry || typeof entry !== 'object') return;
     const e = entry as Record<string, unknown>;
-    const start = typeof e.start === 'number' ? e.start : 0;
-    const end = typeof e.end === 'number' ? e.end : fallbackDuration;
+    const start = typeof e.startMs === 'number' ? e.startMs / 1000 : typeof e.start === 'number' ? e.start : 0;
+    const end = typeof e.end === 'number' ? e.end : null;
     const title = typeof e.title === 'string' ? e.title : `Chapter ${index + 1}`;
-    chapters.push({ id: index, start, end, title });
+    parsed.push({ start, end, title });
   });
-  return chapters;
+  return parsed.map((chapter, index) => ({
+    id: index,
+    start: chapter.start,
+    end: chapter.end ?? (index + 1 < parsed.length ? parsed[index + 1].start : fallbackDuration),
+    title: chapter.title,
+  }));
 }

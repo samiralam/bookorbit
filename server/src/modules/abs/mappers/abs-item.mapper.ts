@@ -132,9 +132,21 @@ export function toAbsLibraryItem(item: AbsItemRow, rel: AbsItemRelations, opts: 
   const numTracks = rel.audioFiles.length;
   const metadata = buildMetadata(item, rel);
   const coverPath = `/metadata/items/${item.id}/cover`;
+  const chapters = buildItemChapters(item.chapters, duration);
 
   const media: Record<string, unknown> = opts.minified
-    ? { id: bookAbsId, libraryItemId, metadata, coverPath, tags: [], numTracks, numAudioFiles: numTracks, numChapters: 0, duration, size }
+    ? {
+        id: bookAbsId,
+        libraryItemId,
+        metadata,
+        coverPath,
+        tags: [],
+        numTracks,
+        numAudioFiles: numTracks,
+        numChapters: chapters.length,
+        duration,
+        size,
+      }
     : {
         id: bookAbsId,
         libraryItemId,
@@ -142,7 +154,7 @@ export function toAbsLibraryItem(item: AbsItemRow, rel: AbsItemRelations, opts: 
         coverPath,
         tags: [],
         audioFiles: rel.audioFiles.map((f, i) => toAbsAudioFile(f, i)),
-        chapters: buildItemChapters(item.chapters, duration),
+        chapters,
         duration,
         size,
         numTracks,

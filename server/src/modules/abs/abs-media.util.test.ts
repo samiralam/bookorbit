@@ -17,7 +17,22 @@ describe('audioMimeType', () => {
 });
 
 describe('normalizeChapters', () => {
-  it('maps stored chapters into the ABS chapter shape', () => {
+  it('converts stored startMs offsets to seconds and derives chapter ends', () => {
+    const chapters = normalizeChapters(
+      [
+        { title: 'Intro', startMs: 0 },
+        { title: 'Chapter 1', startMs: 100_000 },
+      ],
+      250,
+    );
+    // end is derived from the next chapter's start; the last ends at the book duration
+    expect(chapters).toEqual([
+      { id: 0, start: 0, end: 100, title: 'Intro' },
+      { id: 1, start: 100, end: 250, title: 'Chapter 1' },
+    ]);
+  });
+
+  it('honors a legacy start/end (seconds) shape when present', () => {
     const chapters = normalizeChapters(
       [
         { start: 0, end: 100, title: 'Intro' },
@@ -31,8 +46,8 @@ describe('normalizeChapters', () => {
     ]);
   });
 
-  it('defaults missing fields (end -> fallbackDuration, title -> "Chapter N")', () => {
-    const chapters = normalizeChapters([{ start: 5 }], 999);
+  it('defaults missing fields (end -> next start / fallbackDuration, title -> "Chapter N")', () => {
+    const chapters = normalizeChapters([{ startMs: 5000 }], 999);
     expect(chapters).toEqual([{ id: 0, start: 5, end: 999, title: 'Chapter 1' }]);
   });
 
