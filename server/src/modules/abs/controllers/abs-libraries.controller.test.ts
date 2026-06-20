@@ -89,13 +89,13 @@ describe('AbsLibrariesController#items', () => {
 describe('AbsLibrariesController#authors', () => {
   it('404s on a malformed library id', async () => {
     const { controller } = build();
-    expect(await thrownStatus(() => controller.authors(makeAbsUser(), 'bogus'))).toBe(404);
+    expect(await thrownStatus(() => controller.authors(makeAbsUser(), 'bogus', {}))).toBe(404);
   });
 
-  it('delegates to the catalog service with the decoded library id', async () => {
+  it('delegates to the catalog service with the decoded library id and query', async () => {
     const { controller, catalogService } = build();
-    const result = await controller.authors(makeAbsUser(), 'lib_5');
-    expect(catalogService.listAuthors).toHaveBeenCalledWith(expect.anything(), 5);
+    const result = await controller.authors(makeAbsUser(), 'lib_5', { limit: '50', page: '0' });
+    expect(catalogService.listAuthors).toHaveBeenCalledWith(expect.anything(), 5, { limit: '50', page: '0' });
     expect(result).toEqual({ authors: [] });
   });
 });

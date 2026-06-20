@@ -6,6 +6,7 @@ describe('toAbsAuthor', () => {
       id: 'aut_1',
       asin: null,
       name: 'Andy Weir',
+      lastFirst: 'Weir, Andy',
       description: 'bio',
       imagePath: null,
       addedAt: 0,
