@@ -11,6 +11,7 @@ import { AbsSocketGateway } from './abs-socket.gateway';
 import { AbsAuthController } from './auth/abs-auth.controller';
 import { AbsAuthGuard } from './auth/abs-auth.guard';
 import { AbsDiscoveryController } from './auth/abs-discovery.controller';
+import { AbsOpenidController } from './auth/abs-openid.controller';
 import { AbsSessionService } from './auth/abs-session.service';
 import { AbsTokenService } from './auth/abs-token.service';
 import { AbsAuthorizeController } from './controllers/abs-authorize.controller';
@@ -39,6 +40,7 @@ import { AbsTranscodeService } from './services/abs-transcode.service';
   controllers: [
     AbsDiscoveryController,
     AbsAuthController,
+    AbsOpenidController,
     AbsAuthorizeController,
     AbsMeController,
     AbsLibrariesController,

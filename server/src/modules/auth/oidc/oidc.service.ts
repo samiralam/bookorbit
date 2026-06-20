@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { compare } from 'bcryptjs';
+import { createHash, randomBytes } from 'crypto';
 import type { FastifyReply } from 'fastify';
 import { AuditAction, AuditResource, OidcCallbackResponse, OidcErrorCode, Permission } from '@bookorbit/types';
 import type { OidcAutoProvision, OidcClaimMapping } from '@bookorbit/types';
@@ -162,53 +163,15 @@ export class OidcService {
     const provider = await this.providerService.findByIdOrFail(stateResult.providerId);
     if (!provider.enabled) throw new UnauthorizedException('OIDC provider is not enabled');
 
-    const claimMapping = provider.claimMapping as OidcClaimMapping;
     const autoProvision = provider.autoProvision as OidcAutoProvision;
 
-    const allowedRedirectUri = `${this.appUrl}/oauth2-callback`;
-    if (normalizeRedirectUri(params.redirectUri) !== normalizeRedirectUri(allowedRedirectUri)) {
-      throw new BadRequestException(`Redirect URI is not allowed: ${params.redirectUri}`);
-    }
-
-    const disc = await this.discovery.getDiscoveryDoc(provider.issuerUri);
-
-    let tokens: Awaited<ReturnType<typeof this.tokenClient.exchangeCode>>;
-    try {
-      tokens = await this.tokenClient.exchangeCode({
-        code: params.code,
-        codeVerifier: params.codeVerifier,
-        redirectUri: params.redirectUri,
-        tokenEndpoint: disc.tokenEndpoint,
-        clientId: provider.clientId,
-        clientSecret: provider.clientSecret ?? '',
-      });
-    } catch {
-      throw new UnauthorizedException({
-        message: 'Could not complete sign-in with your provider. Please try again or contact your administrator.',
-        errorCode: OidcErrorCode.TOKEN_EXCHANGE_FAILED,
-      });
-    }
-
-    const idTokenClaims = await this.tokenValidator.validateIdToken(tokens.idToken, {
-      issuer: disc.issuer,
-      clientId: provider.clientId,
+    const { disc, tokens, idTokenClaims, userInfoClaims, claims } = await this.runCodeExchange(provider, {
+      code: params.code,
+      codeVerifier: params.codeVerifier,
       nonce: params.nonce,
-      jwksUri: disc.jwksUri,
+      redirectUri: params.redirectUri,
+      allowedRedirectUri: `${this.appUrl}/oauth2-callback`,
     });
-
-    let userInfoClaims: Record<string, unknown> = {};
-    if (disc.userinfoEndpoint) {
-      userInfoClaims = await this.tokenClient.fetchUserInfo(disc.userinfoEndpoint, tokens.accessToken);
-    }
-
-    const claims = this.claimExtractor.extract(idTokenClaims as Record<string, unknown>, userInfoClaims, claimMapping);
-    if (!claims.subject) {
-      this.logger.warn('[auth.oidc_callback] [fail] errorClass=UnauthorizedException error="missing sub claim" - OIDC callback failed');
-      throw new UnauthorizedException({
-        message: 'Could not complete sign-in with your provider. Please try again or contact your administrator.',
-        errorCode: OidcErrorCode.TOKEN_EXCHANGE_FAILED,
-      });
-    }
 
     const mode = (stateResult.meta?.mode as string) ?? 'login';
 
@@ -249,9 +212,205 @@ export class OidcService {
     }
 
     // Default: login flow
+    const user = await this.resolveAndSessionUser(provider, disc, claims, tokens, idTokenClaims, autoProvision);
+    const authResult = await this.authService.issueTokensForUser(user.id, reply);
+    return { mode: 'login' as const, ...authResult } as OidcCallbackResponse;
+  }
+
+  // --- ABS adapter surface (server/src/modules/abs/auth/abs-openid.controller.ts) ---------------
+  // ABS's protocol is server-driven (it owns PKCE/nonce), unlike BookOrbit's client-driven web flow,
+  // so the ABS routes call these instead of generateState/handleCallback. They reuse the same provider
+  // records, claim mapping, and auto-provisioning — an ABS OIDC login resolves to the same user.
+
+  /** The single provider ABS advertises (it has no provider-selection in its protocol): first enabled. */
+  async getDesignatedAbsProvider(): Promise<Awaited<ReturnType<OidcProviderService['findEnabled']>>[number] | null> {
+    const enabled = await this.providerService.findEnabled();
+    return enabled[0] ?? null;
+  }
+
+  /**
+   * Begin the ABS authorize flow and return the provider authorize URL to 302 to (ABS
+   * `OidcAuthStrategy.getAuthorizationUrl`). Two shapes, keyed by `mobile`:
+   *
+   * - **Web** (`mobile` absent): the IdP `redirect_uri` is the server `/auth/openid/callback`; the
+   *   server owns PKCE (verifier stashed in the state row) and generates the `state`.
+   * - **Mobile** (`mobile` set): the IdP `redirect_uri` is the server `/auth/openid/mobile-redirect`
+   *   (custom app schemes can't be IdP redirect targets); the native client owns PKCE and forwards its
+   *   `code_challenge`; the client-supplied `state` is preserved so the app can match it on return. The
+   *   app's own redirect (`appRedirect`, e.g. `audiobookshelf://oauth`) is stashed for mobile-redirect.
+   */
+  async beginAbsAuthorization(opts: {
+    callbackUri: string;
+    mobileRedirectUri: string;
+    mobile?: { appRedirect: string; clientState?: string; clientCodeChallenge: string };
+    finalRedirect?: string;
+  }): Promise<string> {
+    const provider = await this.getDesignatedAbsProvider();
+    if (!provider) throw new UnauthorizedException('OIDC is not configured');
+
+    const disc = await this.discovery.getDiscoveryDoc(provider.issuerUri);
+    const nonce = randomBytes(16).toString('base64url');
+    const isMobile = !!opts.mobile;
+
+    // Mobile: the native client owns PKCE and presents the verifier at callback; the IdP redirects to
+    // the server mobile-redirect hop. Web: the server owns PKCE and the IdP redirects to the callback.
+    const idpRedirectUri = isMobile ? opts.mobileRedirectUri : opts.callbackUri;
+    const codeVerifier = isMobile ? undefined : randomBytes(32).toString('base64url');
+    const codeChallenge = opts.mobile?.clientCodeChallenge ?? createHash('sha256').update(codeVerifier!).digest('base64url');
+
+    const state = await this.stateService.generate(
+      provider.id,
+      {
+        mode: 'abs',
+        authMethod: isMobile ? 'openid-mobile' : 'openid',
+        codeVerifier, // undefined ⇒ client owns the verifier and presents it at callback
+        nonce,
+        redirectUri: idpRedirectUri, // must match the token-exchange redirect_uri
+        appRedirect: opts.mobile?.appRedirect, // where mobile-redirect bounces the code
+        finalRedirect: opts.finalRedirect, // web: same-origin URL to hand tokens back to
+      },
+      opts.mobile?.clientState,
+    );
+
+    const url = new URL(disc.authorizationEndpoint);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('client_id', provider.clientId);
+    url.searchParams.set('redirect_uri', idpRedirectUri);
+    url.searchParams.set('scope', provider.scopes);
+    url.searchParams.set('state', state);
+    url.searchParams.set('nonce', nonce);
+    url.searchParams.set('code_challenge', codeChallenge);
+    url.searchParams.set('code_challenge_method', 'S256');
+    return url.toString();
+  }
+
+  /**
+   * The app redirect stashed for an in-flight ABS mobile `state` (e.g. `audiobookshelf://oauth`).
+   * Non-consuming: the subsequent `/auth/openid/callback` exchange still consumes the state. Returns
+   * null if the state is unknown/expired or wasn't a mobile ABS flow.
+   */
+  async getAbsMobileAppRedirect(state: string): Promise<string | null> {
+    const result = await this.stateService.peek(state);
+    if (!result.valid || result.meta?.mode !== 'abs') return null;
+    const appRedirect = result.meta.appRedirect;
+    return typeof appRedirect === 'string' ? appRedirect : null;
+  }
+
+  /**
+   * Complete the ABS callback: consume the `state` row, exchange the code (with the PKCE verifier
+   * either stashed at authorize time or forwarded by a native client), and resolve the user — applying
+   * the same provisioning/group-mapping as the web login. The caller mints ABS-shaped tokens. Returns
+   * the resolved user plus the stashed `authMethod`/`finalRedirect` so the caller can shape the response.
+   */
+  async resolveAbsLoginUser(params: { state: string; code: string; clientCodeVerifier?: string }) {
+    const stateResult = await this.stateService.validateAndConsume(params.state);
+    if (!stateResult.valid || !stateResult.providerId || stateResult.meta?.mode !== 'abs') {
+      throw new UnauthorizedException({
+        message: 'Your login session expired. Please try signing in again.',
+        errorCode: OidcErrorCode.STATE_EXPIRED,
+      });
+    }
+
+    const meta = stateResult.meta;
+    const codeVerifier = (meta.codeVerifier as string | undefined) ?? params.clientCodeVerifier;
+    if (!codeVerifier) throw new BadRequestException('Missing code_verifier');
+
+    const provider = await this.providerService.findByIdOrFail(stateResult.providerId);
+    if (!provider.enabled) throw new UnauthorizedException('OIDC provider is not enabled');
+    const autoProvision = provider.autoProvision as OidcAutoProvision;
+
+    const { disc, tokens, idTokenClaims, claims } = await this.runCodeExchange(provider, {
+      code: params.code,
+      codeVerifier,
+      nonce: meta.nonce as string,
+      redirectUri: meta.redirectUri as string,
+      // ABS's authorize and callback use the same server callback URL; it is the allowed redirect.
+      allowedRedirectUri: meta.redirectUri as string,
+    });
+
+    const user = await this.resolveAndSessionUser(provider, disc, claims, tokens, idTokenClaims, autoProvision);
+    return { user, authMethod: meta.authMethod as string | undefined, finalRedirect: meta.finalRedirect as string | undefined };
+  }
+
+  /** Admin helper backing `GET /auth/openid/config` — read a provider's discovery document. */
+  readDiscoveryDoc(issuerUri: string): Promise<Awaited<ReturnType<OidcDiscoveryService['getDiscoveryDoc']>>> {
+    return this.discovery.getDiscoveryDoc(issuerUri);
+  }
+
+  /**
+   * Exchange an authorization code and resolve the mapped OIDC claims. Shared by the web callback and
+   * the ABS adapter (`server/src/modules/abs/auth/abs-openid.controller.ts`). Performs the redirect-URI
+   * allow-check, code exchange (PKCE), ID-token validation, optional userinfo fetch, and claim mapping.
+   */
+  private async runCodeExchange(
+    provider: Awaited<ReturnType<OidcProviderService['findByIdOrFail']>>,
+    params: { code: string; codeVerifier: string; nonce: string; redirectUri: string; allowedRedirectUri: string },
+  ): Promise<{
+    disc: Awaited<ReturnType<OidcDiscoveryService['getDiscoveryDoc']>>;
+    tokens: Awaited<ReturnType<OidcTokenClientService['exchangeCode']>>;
+    idTokenClaims: Record<string, unknown>;
+    userInfoClaims: Record<string, unknown>;
+    claims: ReturnType<OidcClaimExtractorService['extract']>;
+  }> {
+    if (normalizeRedirectUri(params.redirectUri) !== normalizeRedirectUri(params.allowedRedirectUri)) {
+      throw new BadRequestException(`Redirect URI is not allowed: ${params.redirectUri}`);
+    }
+
+    const disc = await this.discovery.getDiscoveryDoc(provider.issuerUri);
+
+    let tokens: Awaited<ReturnType<OidcTokenClientService['exchangeCode']>>;
+    try {
+      tokens = await this.tokenClient.exchangeCode({
+        code: params.code,
+        codeVerifier: params.codeVerifier,
+        redirectUri: params.redirectUri,
+        tokenEndpoint: disc.tokenEndpoint,
+        clientId: provider.clientId,
+        clientSecret: provider.clientSecret ?? '',
+      });
+    } catch {
+      throw new UnauthorizedException({
+        message: 'Could not complete sign-in with your provider. Please try again or contact your administrator.',
+        errorCode: OidcErrorCode.TOKEN_EXCHANGE_FAILED,
+      });
+    }
+
+    const idTokenClaims = (await this.tokenValidator.validateIdToken(tokens.idToken, {
+      issuer: disc.issuer,
+      clientId: provider.clientId,
+      nonce: params.nonce,
+      jwksUri: disc.jwksUri,
+    })) as Record<string, unknown>;
+
+    let userInfoClaims: Record<string, unknown> = {};
+    if (disc.userinfoEndpoint) {
+      userInfoClaims = await this.tokenClient.fetchUserInfo(disc.userinfoEndpoint, tokens.accessToken);
+    }
+
+    const claims = this.claimExtractor.extract(idTokenClaims, userInfoClaims, provider.claimMapping as OidcClaimMapping);
+    if (!claims.subject) {
+      this.logger.warn('[auth.oidc_callback] [fail] errorClass=UnauthorizedException error="missing sub claim" - OIDC callback failed');
+      throw new UnauthorizedException({
+        message: 'Could not complete sign-in with your provider. Please try again or contact your administrator.',
+        errorCode: OidcErrorCode.TOKEN_EXCHANGE_FAILED,
+      });
+    }
+
+    return { disc, tokens, idTokenClaims, userInfoClaims, claims };
+  }
+
+  /** Provision/link the user for a successful login, persist the OIDC session row, and audit. */
+  private async resolveAndSessionUser(
+    provider: Awaited<ReturnType<OidcProviderService['findByIdOrFail']>>,
+    disc: Awaited<ReturnType<OidcDiscoveryService['getDiscoveryDoc']>>,
+    claims: ReturnType<OidcClaimExtractorService['extract']>,
+    tokens: Awaited<ReturnType<OidcTokenClientService['exchangeCode']>>,
+    idTokenClaims: Record<string, unknown>,
+    autoProvision: OidcAutoProvision,
+  ) {
     const user = await this.findOrProvisionUser(claims, provider, disc.issuer, autoProvision);
 
-    const sid = (idTokenClaims as Record<string, unknown>).sid ? String((idTokenClaims as Record<string, unknown>).sid) : undefined;
+    const sid = typeof idTokenClaims.sid === 'string' ? idTokenClaims.sid : undefined;
     await this.sessionRepo.create({
       userId: user.id,
       providerId: provider.id,
@@ -272,8 +431,7 @@ export class OidcService {
       description: `User logged in via OIDC (issuer: ${disc.issuer})`,
     });
 
-    const authResult = await this.authService.issueTokensForUser(user.id, reply);
-    return { mode: 'login' as const, ...authResult } as OidcCallbackResponse;
+    return user;
   }
 
   private async findOrProvisionUser(

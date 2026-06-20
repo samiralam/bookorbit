@@ -7,9 +7,9 @@ and the routes actually wired up in `server/src/modules/abs/`. Generated 2026-06
 prioritised. Unmarked rows are admin/server-management routes that may be deferred by design — confirm
 against `REIMPLEMENTATION_GUIDE.md` / `BOOKORBIT_PLANNING_PROMPT.md` before treating as required.
 
-> Status snapshot: ~32/215 routes implemented (the client-critical vertical slice). Controllers present:
+> Status snapshot: ~36/215 routes implemented (the client-critical vertical slice). Controllers present:
 > `abs-libraries`, `abs-items`, `abs-me`, `abs-sessions`, `abs-playlists` (list only), `abs-public`,
-> `abs-hls`, `abs-authorize`, `auth/abs-auth`, `auth/abs-discovery`.
+> `abs-hls`, `abs-authorize`, `auth/abs-auth`, `auth/abs-discovery`, `auth/abs-openid`.
 
 ---
 
@@ -44,10 +44,19 @@ These belong to controllers that already exist; the slice is incomplete.
 
 ### Auth / discovery (OIDC)
 
-- [ ] `GET /auth/openid`
-- [ ] `GET /auth/openid/callback`
-- [ ] `GET /auth/openid/mobile-redirect`
-- [ ] `GET /auth/openid/config`
+Thin adapter (`abs-openid.controller.ts`) over BookOrbit's existing OIDC stack (`OidcService`); mirrors ABS
+`OidcAuthStrategy`/`Auth.js`. Same provider record, claim mapping, and auto-provisioning, so an ABS OIDC login
+resolves to the same BookOrbit user as the web flow. `/status` advertises `openid` + button text when a provider
+is enabled. Flow is detected as ABS does (`response_type=code` | `redirect_uri` | `code_challenge` ⇒ mobile).
+**Operator note:** register `<server>/auth/openid/callback` (web) and `<server>/auth/openid/mobile-redirect`
+(mobile — IdPs can't redirect to the `audiobookshelf://` app scheme) as allowed redirect URIs on the IdP client;
+same client/provider as BookOrbit's web login (which uses `<appUrl>/oauth2-callback`). ABS has no provider
+selection, so the first enabled provider is used.
+
+- [x] `GET /auth/openid` — authorize redirect. Web: server-owned PKCE, IdP→`/callback`. Mobile: native client owns PKCE (`code_challenge` relayed), client `state` preserved, IdP→`/mobile-redirect`
+- [x] `GET /auth/openid/callback` — code exchange (verifier server-stashed or client-forwarded); tokens as JSON for mobile/native, same-origin redirect for web
+- [x] `GET /auth/openid/mobile-redirect` — IdP hop: bounces the auth `code` (no token) to `audiobookshelf://oauth`; app then calls `/callback` with the verifier
+- [x] `GET /auth/openid/config` — admin-only `.well-known` read (403 to non-admin)
 
 ### Library items (writes & extras)
 

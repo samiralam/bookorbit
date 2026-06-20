@@ -101,6 +101,40 @@ describe('OidcStateService', () => {
       expect(db.delete).toHaveBeenCalled();
       expect(whereMock).toHaveBeenCalled();
     });
+
+    it('uses an explicit state value when provided (ABS mobile preserves the client state)', async () => {
+      const valuesMock = vi.fn().mockResolvedValue(undefined);
+      const db = {
+        delete: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) }),
+        insert: vi.fn().mockReturnValue({ values: valuesMock }),
+      };
+      const service = new OidcStateService(db as never, mockConfig as never);
+
+      const state = await service.generate(1, undefined, 'client-supplied-state');
+
+      expect(state).toBe('client-supplied-state');
+      expect(valuesMock.mock.calls[0][0].state).toBe('client-supplied-state');
+    });
+  });
+
+  describe('peek', () => {
+    function dbWithRow(row: unknown) {
+      return { query: { oidcStates: { findFirst: vi.fn().mockResolvedValue(row) } } };
+    }
+
+    it('returns the row meta without consuming it (no delete)', async () => {
+      const db = dbWithRow({ state: 's', providerId: 1, meta: JSON.stringify({ mode: 'abs', appRedirect: 'audiobookshelf://oauth' }) });
+      const service = new OidcStateService(db as never, mockConfig as never);
+
+      const result = await service.peek('s');
+      expect(result).toEqual({ valid: true, providerId: 1, meta: { mode: 'abs', appRedirect: 'audiobookshelf://oauth' } });
+    });
+
+    it('returns { valid: false } for an unknown/expired state', async () => {
+      const db = dbWithRow(undefined);
+      const service = new OidcStateService(db as never, mockConfig as never);
+      expect(await service.peek('nope')).toEqual({ valid: false });
+    });
   });
 
   describe('validateAndConsume', () => {

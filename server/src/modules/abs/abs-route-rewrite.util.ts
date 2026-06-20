@@ -30,6 +30,9 @@ export const ABS_EXCLUDED_ROUTES: string[] = [
   'login',
   'logout',
   '__abs/(.*)',
+  // OIDC (distinct from BookOrbit's own `api/v1/auth/oidc/*` web flow)
+  'auth/openid',
+  'auth/openid/(.*)',
   // API surface (distinct from BookOrbit's `api/v1/*` and `api/kobo/*`)
   'api/me',
   'api/me/(.*)',

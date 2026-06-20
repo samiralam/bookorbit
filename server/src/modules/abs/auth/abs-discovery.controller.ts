@@ -6,6 +6,7 @@ import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Public } from '../../../common/decorators/public.decorator';
 import { DB } from '../../../db';
 import * as schema from '../../../db/schema';
+import { OidcService } from '../../auth/oidc/oidc.service';
 import { ABS_APP_NAME, ABS_DEFAULT_LANGUAGE, ABS_SERVER_VERSION } from '../abs.constants';
 import { AbsExceptionFilter } from '../abs-exception.filter';
 import { AbsHttpException } from '../abs-errors';
@@ -24,7 +25,10 @@ interface AbsInitBody {
 @UseFilters(AbsExceptionFilter)
 @Controller()
 export class AbsDiscoveryController {
-  constructor(@Inject(DB) private readonly db: NodePgDatabase<typeof schema>) {}
+  constructor(
+    @Inject(DB) private readonly db: NodePgDatabase<typeof schema>,
+    private readonly oidcService: OidcService,
+  ) {}
 
   @Get('ping')
   ping(): { success: true } {
@@ -39,14 +43,16 @@ export class AbsDiscoveryController {
 
   @Get('status')
   async status(): Promise<Record<string, unknown>> {
-    const isInit = (await this.db.$count(schema.users)) > 0;
+    const [userCount, oidcProvider] = await Promise.all([this.db.$count(schema.users), this.oidcService.getDesignatedAbsProvider()]);
+    const authMethods = oidcProvider ? ['local', 'openid'] : ['local'];
+    const authFormData = oidcProvider ? { authOpenIDButtonText: oidcProvider.displayName, authOpenIDAutoLaunch: false } : {};
     return {
       app: ABS_APP_NAME,
       serverVersion: ABS_SERVER_VERSION,
-      isInit,
+      isInit: userCount > 0,
       language: ABS_DEFAULT_LANGUAGE,
-      authMethods: ['local'],
-      authFormData: {},
+      authMethods,
+      authFormData,
     };
   }
 

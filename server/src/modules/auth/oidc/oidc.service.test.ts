@@ -27,6 +27,7 @@ function makeService() {
     findBySlugOrFail: vi.fn().mockResolvedValue(PROVIDER),
     findByIdOrFail: vi.fn().mockResolvedValue(PROVIDER),
     findByIssuerUri: vi.fn().mockResolvedValue(PROVIDER),
+    findEnabled: vi.fn().mockResolvedValue([PROVIDER]),
   };
   const discovery = {
     getDiscoveryDoc: vi.fn().mockResolvedValue({
@@ -49,6 +50,7 @@ function makeService() {
   const stateService = {
     generate: vi.fn().mockResolvedValue('state-token'),
     validateAndConsume: vi.fn().mockResolvedValue({ valid: true, providerId: 1 }),
+    peek: vi.fn().mockResolvedValue({ valid: false }),
   };
   const sessionRepo = {
     create: vi.fn().mockResolvedValue(undefined),
@@ -118,6 +120,7 @@ function makeService() {
     stateService,
     auditEvents,
     discovery,
+    tokenClient,
     tokenValidator,
     identityRepo,
     groupMapping,
@@ -271,6 +274,123 @@ describe('OidcService', () => {
       await service.unlinkIdentity(5, 1, 'correct-password');
       expect(identityRepo.remove).toHaveBeenCalledWith(5, 1);
       expect(auditEvents.emit).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ action: 'auth.oidc.identity_unlinked' }));
+    });
+  });
+
+  describe('getDesignatedAbsProvider', () => {
+    it('returns the first enabled provider', async () => {
+      const { service } = makeService();
+      expect(await service.getDesignatedAbsProvider()).toBe(PROVIDER);
+    });
+
+    it('returns null when no provider is enabled', async () => {
+      const { service, providerService } = makeService();
+      providerService.findEnabled.mockResolvedValue([]);
+      expect(await service.getDesignatedAbsProvider()).toBeNull();
+    });
+  });
+
+  const CALLBACK_URI = 'https://abs.example/auth/openid/callback';
+  const MOBILE_REDIRECT_URI = 'https://abs.example/auth/openid/mobile-redirect';
+
+  describe('beginAbsAuthorization', () => {
+    it('web flow: server-owned PKCE, IdP redirect_uri = callback, verifier stashed in state', async () => {
+      const { service, stateService } = makeService();
+      const url = new URL(await service.beginAbsAuthorization({ callbackUri: CALLBACK_URI, mobileRedirectUri: MOBILE_REDIRECT_URI }));
+
+      expect(url.origin + url.pathname).toBe('https://issuer.example/auth');
+      expect(url.searchParams.get('client_id')).toBe('client-id');
+      expect(url.searchParams.get('redirect_uri')).toBe(CALLBACK_URI);
+      expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+      expect(url.searchParams.get('code_challenge')).toBeTruthy();
+
+      const meta = stateService.generate.mock.calls[0][1];
+      expect(meta).toMatchObject({ mode: 'abs', authMethod: 'openid', redirectUri: CALLBACK_URI });
+      expect(typeof meta.codeVerifier).toBe('string'); // server owns the verifier
+    });
+
+    it('mobile flow: IdP redirect_uri = mobile-redirect, relays client challenge, preserves client state, stashes app redirect', async () => {
+      const { service, stateService } = makeService();
+      const url = new URL(
+        await service.beginAbsAuthorization({
+          callbackUri: CALLBACK_URI,
+          mobileRedirectUri: MOBILE_REDIRECT_URI,
+          mobile: { appRedirect: 'audiobookshelf://oauth', clientState: 'client-state', clientCodeChallenge: 'client-chal' },
+        }),
+      );
+      expect(url.searchParams.get('redirect_uri')).toBe(MOBILE_REDIRECT_URI);
+      expect(url.searchParams.get('code_challenge')).toBe('client-chal');
+
+      const [, meta, explicitState] = stateService.generate.mock.calls[0];
+      expect(explicitState).toBe('client-state'); // client state preserved so the app can match it
+      expect(meta).toMatchObject({ authMethod: 'openid-mobile', redirectUri: MOBILE_REDIRECT_URI, appRedirect: 'audiobookshelf://oauth' });
+      expect(meta.codeVerifier).toBeUndefined();
+    });
+
+    it('throws when OIDC is not configured', async () => {
+      const { service, providerService } = makeService();
+      providerService.findEnabled.mockResolvedValue([]);
+      await expect(service.beginAbsAuthorization({ callbackUri: CALLBACK_URI, mobileRedirectUri: MOBILE_REDIRECT_URI })).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+  });
+
+  describe('getAbsMobileAppRedirect', () => {
+    it('returns the stashed app redirect without consuming the state', async () => {
+      const { service, stateService } = makeService();
+      stateService.peek = vi.fn().mockResolvedValue({ valid: true, providerId: 1, meta: { mode: 'abs', appRedirect: 'audiobookshelf://oauth' } });
+      expect(await service.getAbsMobileAppRedirect('state')).toBe('audiobookshelf://oauth');
+      expect(stateService.peek).toHaveBeenCalledWith('state');
+    });
+
+    it('returns null for an unknown/expired or non-ABS state', async () => {
+      const { service, stateService } = makeService();
+      stateService.peek = vi.fn().mockResolvedValue({ valid: false });
+      expect(await service.getAbsMobileAppRedirect('state')).toBeNull();
+    });
+  });
+
+  describe('resolveAbsLoginUser', () => {
+    const ABS_META = {
+      mode: 'abs',
+      codeVerifier: 'verifier',
+      nonce: 'nonce',
+      redirectUri: CALLBACK_URI,
+      authMethod: 'openid-mobile',
+    };
+
+    it('exchanges the code and resolves the user, returning the stashed auth method', async () => {
+      const { service, stateService, identityRepo, userService } = makeService();
+      stateService.validateAndConsume.mockResolvedValue({ valid: true, providerId: 1, meta: ABS_META });
+      identityRepo.findByProviderAndSubject.mockResolvedValue({ userId: 5 });
+      userService.findById.mockResolvedValue({ id: 5, username: 'u1', active: true, permissions: [] });
+
+      const result = await service.resolveAbsLoginUser({ state: 'state', code: 'code' });
+      expect(result.user).toMatchObject({ id: 5 });
+      expect(result.authMethod).toBe('openid-mobile');
+    });
+
+    it('rejects a non-ABS or expired state', async () => {
+      const { service, stateService } = makeService();
+      stateService.validateAndConsume.mockResolvedValue({ valid: true, providerId: 1, meta: { mode: 'login' } });
+      await expect(service.resolveAbsLoginUser({ state: 'state', code: 'code' })).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('requires a code_verifier when none was stashed (client did not forward one)', async () => {
+      const { service, stateService } = makeService();
+      stateService.validateAndConsume.mockResolvedValue({ valid: true, providerId: 1, meta: { ...ABS_META, codeVerifier: undefined } });
+      await expect(service.resolveAbsLoginUser({ state: 'state', code: 'code' })).rejects.toThrow(BadRequestException);
+    });
+
+    it('accepts a client-forwarded code_verifier when none was stashed', async () => {
+      const { service, stateService, identityRepo, userService, tokenClient } = makeService();
+      stateService.validateAndConsume.mockResolvedValue({ valid: true, providerId: 1, meta: { ...ABS_META, codeVerifier: undefined } });
+      identityRepo.findByProviderAndSubject.mockResolvedValue({ userId: 5 });
+      userService.findById.mockResolvedValue({ id: 5, username: 'u1', active: true, permissions: [] });
+
+      await service.resolveAbsLoginUser({ state: 'state', code: 'code', clientCodeVerifier: 'client-verifier' });
+      expect(tokenClient.exchangeCode).toHaveBeenCalledWith(expect.objectContaining({ codeVerifier: 'client-verifier' }));
     });
   });
 });
