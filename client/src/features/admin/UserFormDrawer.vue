@@ -25,6 +25,7 @@ const props = defineProps<{
   user: Partial<AuthUser> | null
   libraries: Library[]
   defaultLibraryIds?: number[]
+  currentUserId: number | null
 }>()
 
 const emit = defineEmits<{
@@ -117,6 +118,7 @@ const { search: searchTags } = useTagSearchWithIds()
 const { search: searchGenres } = useGenreSearchWithIds()
 
 const isEdit = computed(() => !!props.user?.id)
+const isSelf = computed(() => !!props.user?.id && props.user.id === props.currentUserId)
 const isSuperuserTarget = computed(() => !!props.user?.isSuperuser)
 const isMobile = useMediaQuery('(max-width: 767px)')
 
@@ -242,15 +244,19 @@ async function handleSubmit() {
         return
       }
 
-      const permRes = await api(`/api/v1/users/${props.user!.id}/permissions`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ permissionNames: [...selectedPermissionNames.value] }),
-      })
-      if (!permRes.ok) {
-        const err = await permRes.json().catch(() => ({}))
-        error.value = err.message ?? t('adminFeature.userForm.errors.updatePermissions')
-        return
+      // The server forbids changing your own permissions, so skip the call when
+      // editing your own account (the permissions UI is read-only in that case).
+      if (!isSelf.value) {
+        const permRes = await api(`/api/v1/users/${props.user!.id}/permissions`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ permissionNames: [...selectedPermissionNames.value] }),
+        })
+        if (!permRes.ok) {
+          const err = await permRes.json().catch(() => ({}))
+          error.value = err.message ?? t('adminFeature.userForm.errors.updatePermissions')
+          return
+        }
       }
 
       const libRes = await api(`/api/v1/users/${props.user!.id}/libraries`, {
@@ -448,7 +454,7 @@ async function handleSubmit() {
           <div class="space-y-3">
             <div class="flex items-center justify-between">
               <label class="settings-label">{{ t('adminFeature.userForm.permissions') }}</label>
-              <div class="flex items-center gap-2">
+              <div v-if="!isSelf" class="flex items-center gap-2">
                 <button type="button" @click="applyPreset('standard')" class="text-xs text-muted-foreground hover:text-foreground">
                   {{ t('adminFeature.userForm.presetStandard') }}
                 </button>
@@ -463,16 +469,24 @@ async function handleSubmit() {
               </div>
             </div>
 
+            <p v-if="isSelf" class="text-xs text-muted-foreground">You cannot change your own permissions.</p>
+
             <div class="space-y-5">
               <div v-for="group in permissionGroups" :key="group.id" class="space-y-2">
                 <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ group.label }}</p>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <label v-for="permName in group.permissions" :key="permName" class="flex cursor-pointer items-start gap-2">
+                  <label
+                    v-for="permName in group.permissions"
+                    :key="permName"
+                    class="flex items-start gap-2"
+                    :class="isSelf ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'"
+                  >
                     <input
                       type="checkbox"
                       :checked="selectedPermissionNames.has(permName)"
+                      :disabled="isSelf"
                       @change="togglePermission(permName)"
-                      class="mt-0.5 h-4 w-4 rounded border-input"
+                      class="mt-0.5 h-4 w-4 rounded border-input disabled:cursor-not-allowed"
                     />
                     <span class="text-sm text-foreground leading-tight">{{ permissionLabel(permName) }}</span>
                   </label>

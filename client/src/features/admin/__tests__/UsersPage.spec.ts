@@ -24,6 +24,7 @@ vi.mock('@/features/auth/composables/usePermissions', () => ({
   usePermissions: () => ({
     isSuperuser: computed(() => permState.isSuperuser),
     hasPermission: vi.fn<(name: string) => boolean>(() => true),
+    currentUserId: computed(() => 1),
   }),
 }))
 

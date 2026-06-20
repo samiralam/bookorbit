@@ -30,7 +30,7 @@ interface UserRow extends AuthUser {
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
-const { isSuperuser, hasPermission } = usePermissions()
+const { isSuperuser, hasPermission, currentUserId } = usePermissions()
 
 const users = ref<UserRow[]>([])
 const libraries = ref<Library[]>([])
@@ -507,6 +507,7 @@ function setsEqual(a: Set<number>, b: Set<number>) {
       :user="editingUser"
       :libraries="libraries"
       :default-library-ids="defaultLibraryIdsArray"
+      :current-user-id="currentUserId"
       @close="drawerOpen = false"
       @saved="onSaved"
     />
