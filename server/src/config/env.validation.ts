@@ -79,6 +79,26 @@ const envSchema = z.object({
     .string()
     .transform((val) => val.trim())
     .optional(),
+  ABS_OIDC_MOBILE_REDIRECT_URIS: z
+    .string()
+    .optional()
+    .refine(
+      (val) =>
+        !val ||
+        val
+          .split(',')
+          .map((uri) => uri.trim())
+          .filter(Boolean)
+          .every((uri) => {
+            try {
+              new URL(uri);
+              return true;
+            } catch {
+              return false;
+            }
+          }),
+      'ABS_OIDC_MOBILE_REDIRECT_URIS must be a comma-separated list of valid URIs (e.g. stillapp://oauth,prologue://oauth)',
+    ),
 });
 
 export function validateEnv(config: Record<string, unknown>) {

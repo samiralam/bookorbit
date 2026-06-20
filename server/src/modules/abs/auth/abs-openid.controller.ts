@@ -17,8 +17,11 @@ import { AbsSessionService } from './abs-session.service';
 
 type Query = Record<string, string | undefined>;
 
-/** Native app links the mobile-redirect hop may bounce an authorization code to (the ABS app). */
-const ALLOWED_APP_REDIRECT_PREFIX = 'audiobookshelf://';
+/**
+ * The official ABS app link the mobile-redirect hop may bounce an authorization code to. Always
+ * allowed (and the fallback when state lookup misses); operators allow additional third-party client
+ * URIs via `ABS_OIDC_MOBILE_REDIRECT_URIS` (see `app.absAllowedAppRedirects`).
+ */
 const DEFAULT_APP_REDIRECT = 'audiobookshelf://oauth';
 
 /**
@@ -44,6 +47,8 @@ const DEFAULT_APP_REDIRECT = 'audiobookshelf://oauth';
 @Controller('auth/openid')
 export class AbsOpenidController {
   private readonly appOrigin: string;
+  /** Exact-match allowlist of mobile redirect URIs (RFC 8252 / OAuth Security BCP — no wildcards). */
+  private readonly allowedAppRedirects: Set<string>;
 
   constructor(
     private readonly oidcService: OidcService,
@@ -53,6 +58,7 @@ export class AbsOpenidController {
     config: ConfigService,
   ) {
     this.appOrigin = safeOrigin(config.get<string>('app.appUrl') ?? '');
+    this.allowedAppRedirects = new Set([DEFAULT_APP_REDIRECT, ...(config.get<string[]>('app.absAllowedAppRedirects') ?? [])]);
   }
 
   /** Begin OIDC: build the provider authorize URL and 302 to it. */
@@ -66,7 +72,7 @@ export class AbsOpenidController {
 
     let mobile: { appRedirect: string; clientState?: string; clientCodeChallenge: string } | undefined;
     if (isMobileFlow(q)) {
-      if (!q.redirect_uri || !q.redirect_uri.startsWith(ALLOWED_APP_REDIRECT_PREFIX)) {
+      if (!q.redirect_uri || !this.allowedAppRedirects.has(q.redirect_uri)) {
         throw AbsHttpException.text(400, 'Invalid redirect_uri');
       }
       if (!q.code_challenge) throw AbsHttpException.text(400, 'code_challenge required for mobile flow (PKCE)');

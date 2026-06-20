@@ -36,6 +36,7 @@ interface BuildOpts {
   user?: ReturnType<typeof makeAbsUser> | null;
   accessibleIds?: number[];
   discoveryDoc?: Record<string, unknown>;
+  allowedAppRedirects?: string[];
 }
 
 function build(opts: BuildOpts = {}) {
@@ -54,7 +55,9 @@ function build(opts: BuildOpts = {}) {
   const libraryService = {
     findAccessibleLibraryIds: vi.fn().mockResolvedValue(opts.accessibleIds ?? []),
   } as unknown as LibraryService;
-  const config = { get: vi.fn().mockReturnValue(APP_URL) } as unknown as ConfigService;
+  const config = {
+    get: vi.fn((key: string) => (key === 'app.absAllowedAppRedirects' ? (opts.allowedAppRedirects ?? []) : APP_URL)),
+  } as unknown as ConfigService;
   return {
     controller: new AbsOpenidController(oidcService, userService, sessionService, libraryService, config),
     oidcService,
@@ -131,6 +134,40 @@ describe('AbsOpenidController#begin', () => {
         ),
       ),
     ).toBe(400);
+  });
+
+  it('rejects a third-party app redirect_uri that is not in the configured allowlist', async () => {
+    const { controller } = build();
+    const { reply } = makeReply();
+    expect(
+      await thrownStatus(() =>
+        controller.begin(makeRequest({ headers: { host: 'abs.example' }, query: { redirect_uri: 'stillapp://oauth', code_challenge: 'c' } }), reply),
+      ),
+    ).toBe(400);
+  });
+
+  it('accepts an operator-allowlisted third-party app redirect_uri', async () => {
+    const { controller, oidcService } = build({ allowedAppRedirects: ['stillapp://oauth'] });
+    const { reply } = makeReply();
+    await controller.begin(
+      makeRequest({ headers: { host: 'abs.example' }, query: { redirect_uri: 'stillapp://oauth', code_challenge: 'chal', state: 's' } }),
+      reply,
+    );
+    expect(oidcService.beginAbsAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ mobile: { appRedirect: 'stillapp://oauth', clientState: 's', clientCodeChallenge: 'chal' } }),
+    );
+  });
+
+  it('always accepts the built-in audiobookshelf:// app redirect without configuration', async () => {
+    const { controller, oidcService } = build({ allowedAppRedirects: [] });
+    const { reply } = makeReply();
+    await controller.begin(
+      makeRequest({ headers: { host: 'abs.example' }, query: { redirect_uri: 'audiobookshelf://oauth', code_challenge: 'chal' } }),
+      reply,
+    );
+    expect(oidcService.beginAbsAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ mobile: expect.objectContaining({ appRedirect: 'audiobookshelf://oauth' }) }),
+    );
   });
 
   it('rejects a non-code response_type', async () => {
