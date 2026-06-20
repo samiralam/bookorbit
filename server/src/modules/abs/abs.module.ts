@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 
 import { AchievementModule } from '../achievement/achievement.module';
+import { AuthModule } from '../auth/auth.module';
 import { LibraryModule } from '../library/library.module';
 import { UserModule } from '../user/user.module';
 import { AbsEventBridgeService } from './abs-event-bridge.service';
@@ -34,7 +35,7 @@ import { AbsTranscodeService } from './services/abs-transcode.service';
  * via raw bodies + a controller-scoped AbsExceptionFilter, and reuses BookOrbit services for data.
  */
 @Module({
-  imports: [JwtModule.register({}), UserModule, LibraryModule, AchievementModule],
+  imports: [JwtModule.register({}), UserModule, LibraryModule, AchievementModule, AuthModule],
   controllers: [
     AbsDiscoveryController,
     AbsAuthController,

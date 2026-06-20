@@ -1,8 +1,27 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, UseFilters, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  Res,
+  UnauthorizedException,
+  UseFilters,
+  UseGuards,
+} from '@nestjs/common';
+import { Permission } from '@bookorbit/types';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { Public } from '../../../common/decorators/public.decorator';
 import type { RequestUser } from '../../../common/types/request-user';
+import { AuthService } from '../../auth/auth.service';
 import { LibraryService } from '../../library/library.service';
 import { AbsExceptionFilter } from '../abs-exception.filter';
 import { AbsHttpException } from '../abs-errors';
@@ -18,6 +37,19 @@ interface BookmarkBody {
   title?: string;
 }
 
+interface ChangePasswordBody {
+  password?: string;
+  newPassword?: string;
+}
+
+/**
+ * BookOrbit's native password policy (mirrors `auth/dto/change-password.dto.ts`): at least 8 chars
+ * with an upper, a lower, and a digit. ABS upstream accepts any password, but we keep the platform
+ * invariant so the ABS route isn't a weak-password side door.
+ */
+const PASSWORD_MIN_LENGTH = 8;
+const PASSWORD_COMPLEXITY = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/;
+
 /** Current-user endpoint + progress upserts (REIMPLEMENTATION_GUIDE §3, §7.1). */
 @Public()
 @UseGuards(AbsAuthGuard)
@@ -29,6 +61,7 @@ export class AbsMeController {
     private readonly libraryService: LibraryService,
     private readonly catalogService: AbsCatalogService,
     private readonly bookmarkService: AbsBookmarkService,
+    private readonly authService: AuthService,
   ) {}
 
   @Get()
@@ -115,6 +148,43 @@ export class AbsMeController {
     if (bookId === null) throw AbsHttpException.notFound();
     const removed = await this.progressService.deleteProgress(user.id, bookId);
     if (!removed) throw AbsHttpException.notFound();
+  }
+
+  /**
+   * Change the caller's password (ABS `MeController.updatePassword`). Body is `{ password, newPassword }`.
+   * Delegates to BookOrbit's `AuthService.changePassword` for the single source of truth (hashing,
+   * audit event, web-session revocation, OIDC/shared blocking), then maps failures onto ABS's wire
+   * shapes: demo accounts → 403 bare, bad input / wrong current password → 400 text, success → 200.
+   * The ABS access token survives the change (it carries no `tokenVersion`), so the client stays in.
+   */
+  @Patch('password')
+  @HttpCode(200)
+  async changePassword(
+    @CurrentUser() user: RequestUser,
+    @Body() body: ChangePasswordBody,
+    @Req() req: FastifyRequest,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<void> {
+    if (user.permissions.includes(Permission.DemoRestricted)) throw AbsHttpException.forbidden();
+
+    const { password, newPassword } = body ?? {};
+    if (typeof password !== 'string' || typeof newPassword !== 'string') {
+      throw AbsHttpException.text(400, 'Missing or invalid password or new password');
+    }
+    if (newPassword.length < PASSWORD_MIN_LENGTH || !PASSWORD_COMPLEXITY.test(newPassword)) {
+      throw AbsHttpException.text(
+        400,
+        'Invalid new password - must be at least 8 characters with an uppercase letter, a lowercase letter, and a digit',
+      );
+    }
+
+    try {
+      await this.authService.changePassword(user.id, { currentPassword: password, newPassword }, reply, req.ip);
+    } catch (err) {
+      if (err instanceof UnauthorizedException) throw AbsHttpException.text(400, 'Invalid password');
+      if (err instanceof BadRequestException) throw AbsHttpException.text(400, err.message);
+      throw err;
+    }
   }
 
   /**

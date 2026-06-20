@@ -1,16 +1,23 @@
+import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { Permission } from '@bookorbit/types';
+import type { FastifyReply, FastifyRequest } from 'fastify';
+
+import type { AuthService } from '../../auth/auth.service';
 import type { LibraryService } from '../../library/library.service';
 import type { AbsBookmarkService } from '../services/abs-bookmark.service';
 import type { AbsCatalogService } from '../services/abs-catalog.service';
 import type { AbsProgressService } from '../services/abs-progress.service';
-import { makeAbsUser } from '../__testing__/abs-test-helpers';
+import { makeAbsUser, thrownStatus } from '../__testing__/abs-test-helpers';
 import { AbsMeController } from './abs-me.controller';
+
+const noopAuthService = {} as unknown as AuthService;
 
 function build(progress: Record<string, unknown>[], accessibleIds: number[]) {
   const progressService = { listMediaProgressForUser: vi.fn().mockResolvedValue(progress) } as unknown as AbsProgressService;
   const libraryService = { findAccessibleLibraryIds: vi.fn().mockResolvedValue(accessibleIds) } as unknown as LibraryService;
   const catalogService = {} as unknown as AbsCatalogService;
   const bookmarkService = { listForUser: vi.fn().mockResolvedValue([]) } as unknown as AbsBookmarkService;
-  return { controller: new AbsMeController(progressService, libraryService, catalogService, bookmarkService), progressService };
+  return { controller: new AbsMeController(progressService, libraryService, catalogService, bookmarkService, noopAuthService), progressService };
 }
 
 describe('AbsMeController#listeningSessions', () => {
@@ -39,6 +46,7 @@ describe('AbsMeController#deleteProgress', () => {
       {} as unknown as LibraryService,
       {} as unknown as AbsCatalogService,
       {} as unknown as AbsBookmarkService,
+      noopAuthService,
     );
     return { controller, progressService };
   }
@@ -79,6 +87,7 @@ describe('AbsMeController stub stats endpoints', () => {
       {} as unknown as LibraryService,
       {} as unknown as AbsCatalogService,
       {} as unknown as AbsBookmarkService,
+      noopAuthService,
     );
   }
 
@@ -136,7 +145,7 @@ describe('AbsMeController#me', () => {
     const libraryService = { findAccessibleLibraryIds: vi.fn().mockResolvedValue([]) } as unknown as LibraryService;
     const bookmarks = [{ libraryItemId: 'li_3', title: 'A quote', time: 120, createdAt: 0 }];
     const bookmarkService = { listForUser: vi.fn().mockResolvedValue(bookmarks) } as unknown as AbsBookmarkService;
-    const controller = new AbsMeController(progressService, libraryService, {} as unknown as AbsCatalogService, bookmarkService);
+    const controller = new AbsMeController(progressService, libraryService, {} as unknown as AbsCatalogService, bookmarkService, noopAuthService);
 
     const user = await controller.me(makeAbsUser({ id: 8 }));
     expect(user.bookmarks).toEqual(bookmarks);
@@ -155,6 +164,7 @@ describe('AbsMeController bookmarks', () => {
       {} as unknown as LibraryService,
       {} as unknown as AbsCatalogService,
       bookmarkService,
+      noopAuthService,
     );
     return { controller, bookmarkService };
   }
@@ -186,5 +196,73 @@ describe('AbsMeController bookmarks', () => {
     const { controller, bookmarkService } = build();
     (bookmarkService.remove as ReturnType<typeof vi.fn>).mockResolvedValue(false);
     await expect(controller.deleteBookmark(makeAbsUser(), 'li_3', '90')).rejects.toMatchObject({});
+  });
+});
+
+describe('AbsMeController#changePassword', () => {
+  function build() {
+    const authService = { changePassword: vi.fn().mockResolvedValue(undefined) } as unknown as AuthService;
+    const controller = new AbsMeController(
+      {} as unknown as AbsProgressService,
+      {} as unknown as LibraryService,
+      {} as unknown as AbsCatalogService,
+      {} as unknown as AbsBookmarkService,
+      authService,
+    );
+    return { controller, authService };
+  }
+
+  const reply = {} as unknown as FastifyReply;
+  const req = { ip: '1.2.3.4' } as unknown as FastifyRequest;
+  const strong = 'NewPassw0rd';
+
+  it('delegates to AuthService.changePassword and returns 200 (no body)', async () => {
+    const { controller, authService } = build();
+    await expect(controller.changePassword(makeAbsUser({ id: 8 }), { password: 'old', newPassword: strong }, req, reply)).resolves.toBeUndefined();
+    expect(authService.changePassword).toHaveBeenCalledWith(8, { currentPassword: 'old', newPassword: strong }, reply, '1.2.3.4');
+  });
+
+  it('403s a demo-restricted account before touching AuthService', async () => {
+    const { controller, authService } = build();
+    await expect(
+      thrownStatus(() =>
+        controller.changePassword(makeAbsUser({ permissions: [Permission.DemoRestricted] }), { password: 'old', newPassword: strong }, req, reply),
+      ),
+    ).resolves.toBe(403);
+    expect(authService.changePassword).not.toHaveBeenCalled();
+  });
+
+  it('400s when either field is missing or not a string', async () => {
+    const { controller } = build();
+    await expect(thrownStatus(() => controller.changePassword(makeAbsUser(), { newPassword: strong }, req, reply))).resolves.toBe(400);
+    await expect(
+      thrownStatus(() => controller.changePassword(makeAbsUser(), { password: 'old', newPassword: 123 as unknown as string }, req, reply)),
+    ).resolves.toBe(400);
+  });
+
+  it('400s a new password that fails the BookOrbit complexity policy', async () => {
+    const { controller, authService } = build();
+    await expect(thrownStatus(() => controller.changePassword(makeAbsUser(), { password: 'old', newPassword: 'weak' }, req, reply))).resolves.toBe(
+      400,
+    );
+    expect(authService.changePassword).not.toHaveBeenCalled();
+  });
+
+  it('maps a wrong current password (UnauthorizedException) to 400', async () => {
+    const { controller, authService } = build();
+    (authService.changePassword as ReturnType<typeof vi.fn>).mockRejectedValue(new UnauthorizedException('Current password is incorrect'));
+    await expect(thrownStatus(() => controller.changePassword(makeAbsUser(), { password: 'wrong', newPassword: strong }, req, reply))).resolves.toBe(
+      400,
+    );
+  });
+
+  it('maps an OIDC/shared rejection (BadRequestException) to 400', async () => {
+    const { controller, authService } = build();
+    (authService.changePassword as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new BadRequestException('OIDC accounts cannot change their password here'),
+    );
+    await expect(thrownStatus(() => controller.changePassword(makeAbsUser(), { password: 'old', newPassword: strong }, req, reply))).resolves.toBe(
+      400,
+    );
   });
 });

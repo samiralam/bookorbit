@@ -71,7 +71,7 @@ These belong to controllers that already exist; the slice is incomplete.
 - [x] `GET /me/listening-stats` — zeroed stats envelope (no per-session history retained)
 - [ ] `GET /me/progress/:id/remove-from-continue-listening` — needs a `hideFromContinueListening` column on `audiobook_progress` (mapper currently hardcodes `false`); defer to its own migration PR
 - [x] `DELETE /me/progress/:id` — deletes the `audiobook_progress` row via `AbsProgressService#deleteProgress`; accepts the composite `usr_<u>-li_<b>` id (or bare `li_<b>`), verifies the user segment, 404 when absent
-- [ ] `PATCH /me/password`
+- [x] `PATCH /me/password` — delegates to `AuthService.changePassword` (single source of truth: hashing, audit event, web-session revocation, OIDC/shared blocking); maps to ABS wire shapes (demo → 403, bad input/wrong current password → 400 text, success → 200). Enforces BookOrbit's password policy so the ABS route isn't a weak-password side door
 - [ ] `GET /me/series/:id/remove-from-continue-listening` / `readd-to-continue-listening`
 - [x] `GET /me/stats/year/:year` — zeroed year-in-review envelope (no per-session history retained)
 - [ ] `POST /me/ereader-devices`
