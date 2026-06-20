@@ -23,15 +23,10 @@ These belong to controllers that already exist; the slice is incomplete.
       negotiation (`playMethod=2`) in `abs-playback.service.ts`, ffmpeg-backed stream manager in
       `abs-transcode.service.ts`, route in `abs-hls.controller.ts`, and `stream_reset` socket emit on
       out-of-window seeks (REIMPLEMENTATION_GUIDE §5.1–5.3).
-- [ ] **★ `POST /items/:id/play/:episodeId`** — podcast-episode playback (book `play` exists, episode variant missing)
 - [x] **★ `GET /items/:id/file/:fileid`** — inline file stream. Implemented: `streamFileInline` in
       `abs-items.controller.ts` + `getItemFile` in `abs-catalog.service.ts` (jwt + library access only,
       no `canDownload`), range-aware via `abs-stream.service.ts`.
 - [ ] **★ public share track** — `GET /public/share/:slug/track/:index` (+ landing/cover/download/progress, see Priority 2 §Shares)
-
-### Library browse
-
-- [ ] **★ `GET /libraries/:id/recent-episodes`** — podcast "latest" shelf
 
 ### Playlists (only `GET /playlists` list is implemented)
 
@@ -39,7 +34,7 @@ These belong to controllers that already exist; the slice is incomplete.
 - [ ] `GET /playlists/:id`
 - [ ] `PATCH /playlists/:id`
 - [ ] `DELETE /playlists/:id`
-- [ ] `POST /playlists/:id/item` / `DELETE /playlists/:id/item/:libraryItemId/:episodeId?`
+- [ ] `POST /playlists/:id/item` / `DELETE /playlists/:id/item/:libraryItemId/:episodeId?` (episode param N/A — BookOrbit items have no episodes)
 - [ ] `POST /playlists/:id/batch/add` / `POST /playlists/:id/batch/remove`
 - [ ] `POST /playlists/collection/:collectionId` — create from collection
 
@@ -72,7 +67,7 @@ These belong to controllers that already exist; the slice is incomplete.
 ### Current user (`/me`)
 
 - [x] `GET /me/listening-sessions` — returns an empty ABS history page (BookOrbit keeps no ABS-shaped session history); satisfies clients (e.g. Prologue) that probe it on connect
-- [ ] `GET /me/item/listening-sessions/:libraryItemId/:episodeId?`
+- [ ] `GET /me/item/listening-sessions/:libraryItemId/:episodeId?` (episode param N/A — BookOrbit items have no episodes)
 - [ ] `GET /me/listening-stats`
 - [ ] `GET /me/progress/:id/remove-from-continue-listening`
 - [ ] `DELETE /me/progress/:id`
@@ -92,13 +87,11 @@ These belong to controllers that already exist; the slice is incomplete.
 
 - [ ] `POST /libraries` (create), `PATCH /libraries/:id`, `DELETE /libraries/:id`
 - [ ] `DELETE /libraries/:id/issues`
-- [ ] `GET /libraries/:id/episode-downloads`
 - [ ] `GET /libraries/:id/series/:seriesId`
 - [ ] `GET /libraries/:id/stats`
 - [x] `GET /libraries/:id/authors` — authors with in-library book counts (primary browse axis for author-centric clients, e.g. Prologue)
 - [ ] `GET /libraries/:id/narrators`, `PATCH`/`DELETE /libraries/:id/narrators/:narratorId`
 - [ ] `GET /libraries/:id/matchall`, `POST /libraries/:id/scan`
-- [ ] `GET /libraries/:id/opml`, `GET /libraries/:id/podcast-titles`
 - [ ] `POST /libraries/order`, `POST /libraries/:id/remove-metadata`
 - [ ] `GET /libraries/:id/download`
 
@@ -118,11 +111,10 @@ Each is a whole domain with zero routes today.
 - [ ] **Collections** (`/api/collections`) — 9 routes (CRUD + book add/remove + batch)
 - [~] **Authors** (`/api/authors`) — `GET /authors/:id` (with `?include=items,series`) implemented; remaining: update/delete, match, image get/upload/delete
 - [ ] **Series** standalone (`/api/series`) — 2 routes (get one, update)
-- [ ] **Podcasts** (`/api/podcasts`) — 13 routes (feed parse, OPML, episodes, downloads, match)
 - [ ] **Users** (`/api/users`, admin) — 9 routes
-- [ ] **Notifications** (`/api/notifications`, admin) — 8 routes
+- [ ] **Notifications** (`/api/notifications`, admin) — 8 routes (reduced relevance: ABS events are mostly `onPodcastEpisodeDownloaded`; without podcasts only backup/test events remain)
 - [ ] **Emails / e-reader** (`/api/emails`) — 5 routes
-- [ ] **Search providers** (`/api/search`) — 6 routes (covers/books/podcast/authors/chapters/providers)
+- [ ] **Search providers** (`/api/search`) — 6 routes (covers/books/~~podcast~~/authors/chapters/providers; `GET /search/podcast` N/A — no podcast support)
 - [ ] **RSS feeds** (`/api/feeds`) — 5 routes
 - [ ] **Shares** (`/api/share`) — `POST /share/mediaitem`, `DELETE /share/mediaitem/:id` (public side in Priority 2)
 - [ ] **Tools** (`/api/tools`, admin) — 4 routes (encode-m4b, embed-metadata)
@@ -134,6 +126,20 @@ Each is a whole domain with zero routes today.
 - [ ] **Stats** (`/api/stats`, admin) — 2 routes
 - [ ] **Misc / settings** (`/api`, admin) — 16 routes (`/upload`, `/tasks`, `/settings`, tags, genres,
       `/validate-cron`, `/auth-settings`, `/watcher/update`, `/logger-data`, …). `POST /authorize` already done.
+
+---
+
+## Priority 4 — podcasts (not planned)
+
+BookOrbit does not currently support podcasts, so this part of the ABS API is **out of scope**. These
+routes are tracked only for completeness against the upstream surface; do not implement them unless
+podcast support is added to BookOrbit. Even the ★ client-critical markings below are deprioritised here.
+
+- [ ] **★ `POST /items/:id/play/:episodeId`** — podcast-episode playback (book `play` exists, episode variant missing)
+- [ ] **★ `GET /libraries/:id/recent-episodes`** — podcast "latest" shelf
+- [ ] `GET /libraries/:id/episode-downloads`
+- [ ] `GET /libraries/:id/opml`, `GET /libraries/:id/podcast-titles`
+- [ ] **Podcasts** (`/api/podcasts`) — 13 routes (feed parse, OPML, episodes, downloads, match)
 
 ---
 
