@@ -90,7 +90,10 @@ export class AbsOpenidController {
       // which would trip mobile detection). Same-origin is enforced when the token is actually emitted.
       finalRedirect: mobile ? undefined : q.callback,
     });
-    reply.redirect(authorizeUrl);
+    // Pass the status explicitly: Nest's Fastify adapter pre-sets the reply status to 200, and
+    // Fastify's `redirect()` reuses an already-set status instead of defaulting to 302 — a 200 with a
+    // `Location` header isn't followed (iOS renders the empty body as a blank "openid" download).
+    reply.redirect(authorizeUrl, 302);
   }
 
   /**
@@ -108,7 +111,7 @@ export class AbsOpenidController {
     for (const key of ['code', 'state', 'error', 'error_description'] as const) {
       if (q[key] != null) target.searchParams.set(key, q[key]);
     }
-    reply.redirect(target.toString());
+    reply.redirect(target.toString(), 302);
   }
 
   /** OIDC code exchange. Tokens are returned as JSON for mobile/native; web redirects same-origin. */
@@ -142,7 +145,7 @@ export class AbsOpenidController {
       target.searchParams.set('setToken', tokens.accessToken);
       target.searchParams.set('accessToken', tokens.accessToken);
       target.searchParams.set('state', q.state);
-      reply.redirect(target.toString());
+      reply.redirect(target.toString(), 302);
       return;
     }
 

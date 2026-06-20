@@ -11,10 +11,11 @@ const APP_URL = 'https://app.example';
 
 /** Fastify reply mock recording redirect/status/body. */
 function makeReply() {
-  const calls: { redirect?: string; status: number; body: unknown } = { status: 200, body: undefined };
+  const calls: { redirect?: string; redirectStatus?: number; status: number; body: unknown } = { status: 200, body: undefined };
   const reply: any = {
-    redirect(url: string) {
+    redirect(url: string, code?: number) {
       calls.redirect = url;
+      calls.redirectStatus = code;
       return reply;
     },
     status(code: number) {
@@ -71,6 +72,9 @@ describe('AbsOpenidController#begin', () => {
     const { reply, calls } = makeReply();
     await controller.begin(makeRequest({ headers: { host: 'abs.example' } }), reply);
     expect(calls.redirect).toBe('https://idp.example/authorize?state=s');
+    // Must be an explicit 302: Fastify's redirect() reuses the 200 Nest pre-sets otherwise, and a 200
+    // with a Location header isn't followed (iOS shows a blank "openid" download).
+    expect(calls.redirectStatus).toBe(302);
   });
 
   it('passes the server callback + mobile-redirect URIs (proxy-aware) for a web flow', async () => {
