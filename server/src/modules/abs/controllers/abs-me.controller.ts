@@ -6,7 +6,7 @@ import type { RequestUser } from '../../../common/types/request-user';
 import { LibraryService } from '../../library/library.service';
 import { AbsExceptionFilter } from '../abs-exception.filter';
 import { AbsHttpException } from '../abs-errors';
-import { decodeAbsId, encodeAbsId } from '../abs-id.util';
+import { ABS_ID_PREFIX, decodeAbsId, encodeAbsId } from '../abs-id.util';
 import { AbsAuthGuard } from '../auth/abs-auth.guard';
 import { toAbsUser } from '../mappers/abs-user.mapper';
 import { AbsBookmarkService } from '../services/abs-bookmark.service';
@@ -103,6 +103,63 @@ export class AbsMeController {
     }
   }
 
+  /**
+   * Delete a MediaProgress. ABS addresses it by the composite progress id (`usr_<u>-li_<b>`, as built
+   * in `AbsProgressService#toMediaProgress`); we also accept a bare `li_<b>`. The user segment, when
+   * present, must match the caller so one user can't clear another's progress. 404 when nothing exists.
+   */
+  @Delete('progress/:id')
+  @HttpCode(200)
+  async deleteProgress(@CurrentUser() user: RequestUser, @Param('id') id: string): Promise<void> {
+    const bookId = this.resolveProgressBookId(user, id);
+    if (bookId === null) throw AbsHttpException.notFound();
+    const removed = await this.progressService.deleteProgress(user.id, bookId);
+    if (!removed) throw AbsHttpException.notFound();
+  }
+
+  /**
+   * Per-item listening history (REIMPLEMENTATION_GUIDE §8). Like `listening-sessions`, BookOrbit keeps
+   * no ABS-shaped sessions, so this is an empty page; the id is still decoded to 404 on garbage input.
+   */
+  @Get('item/listening-sessions/:libraryItemId/:episodeId?')
+  itemListeningSessions(@Param('libraryItemId') libraryItemId: string, @Query() query: Record<string, string>): Record<string, unknown> {
+    if (decodeAbsId('libraryItem', libraryItemId) === null) throw AbsHttpException.notFound();
+    const parsed = Number.parseInt(query.itemsPerPage ?? '', 10);
+    const itemsPerPage = Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
+    const parsedPage = Number.parseInt(query.page ?? '', 10);
+    const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 0;
+    return { total: 0, numPages: 0, page, itemsPerPage, sessions: [] };
+  }
+
+  /**
+   * Aggregate listening stats. BookOrbit retains no per-session history, so every bucket is empty —
+   * enough for clients that render a stats screen without erroring on a missing payload.
+   */
+  @Get('listening-stats')
+  listeningStats(): Record<string, unknown> {
+    return { totalTime: 0, items: {}, days: {}, dayOfWeek: {}, today: 0, recentSessions: [] };
+  }
+
+  /** Year-in-review stats — zeroed for the same reason as `listening-stats` (no session history). */
+  @Get('stats/year/:year')
+  statsForYear(): Record<string, unknown> {
+    return {
+      totalListeningSessions: 0,
+      totalListeningTime: 0,
+      totalBookListeningTime: 0,
+      totalPodcastListeningTime: 0,
+      topAuthors: [],
+      topGenres: [],
+      mostListenedNarrator: null,
+      mostListenedMonth: null,
+      numBooksFinished: 0,
+      numBooksListened: 0,
+      longestAudiobookFinished: null,
+      booksWithCovers: [],
+      finishedBooksWithCovers: [],
+    };
+  }
+
   /** Create (or rename in place) an audio bookmark at `{ time, title }`. */
   @Post('item/:id/bookmark')
   async createBookmark(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() body: BookmarkBody): Promise<Record<string, unknown>> {
@@ -130,5 +187,18 @@ export class AbsMeController {
     if (bookId === null || !Number.isFinite(seconds)) throw AbsHttpException.notFound();
     const removed = await this.bookmarkService.remove(user.id, bookId, seconds);
     if (!removed) throw AbsHttpException.notFound();
+  }
+
+  /**
+   * Resolve the book id targeted by a delete-progress request. Accepts the composite progress id
+   * `usr_<u>-li_<b>` or a bare `li_<b>`. Returns null (→ 404) on malformed input or when the user
+   * segment names someone other than the caller.
+   */
+  private resolveProgressBookId(user: RequestUser, rawId: string): number | null {
+    const segments = rawId.split('-');
+    const userSegment = segments.find((seg) => seg.startsWith(`${ABS_ID_PREFIX.user}_`));
+    if (userSegment !== undefined && decodeAbsId('user', userSegment) !== user.id) return null;
+    const itemSegment = segments.find((seg) => seg.startsWith(`${ABS_ID_PREFIX.libraryItem}_`)) ?? rawId;
+    return decodeAbsId('libraryItem', itemSegment);
   }
 }

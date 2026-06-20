@@ -31,6 +31,85 @@ describe('AbsMeController#listeningSessions', () => {
   });
 });
 
+describe('AbsMeController#deleteProgress', () => {
+  function build(removed = true) {
+    const progressService = { deleteProgress: vi.fn().mockResolvedValue(removed) } as unknown as AbsProgressService;
+    const controller = new AbsMeController(
+      progressService,
+      {} as unknown as LibraryService,
+      {} as unknown as AbsCatalogService,
+      {} as unknown as AbsBookmarkService,
+    );
+    return { controller, progressService };
+  }
+
+  it('deletes by the composite progress id, decoding the library item half', async () => {
+    const { controller, progressService } = build();
+    await controller.deleteProgress(makeAbsUser({ id: 8 }), 'usr_8-li_42');
+    expect(progressService.deleteProgress).toHaveBeenCalledWith(8, 42);
+  });
+
+  it('also accepts a bare library item id', async () => {
+    const { controller, progressService } = build();
+    await controller.deleteProgress(makeAbsUser({ id: 8 }), 'li_42');
+    expect(progressService.deleteProgress).toHaveBeenCalledWith(8, 42);
+  });
+
+  it('404s when the composite id names a different user', async () => {
+    const { controller, progressService } = build();
+    await expect(controller.deleteProgress(makeAbsUser({ id: 8 }), 'usr_9-li_42')).rejects.toMatchObject({});
+    expect(progressService.deleteProgress).not.toHaveBeenCalled();
+  });
+
+  it('404s on a malformed id', async () => {
+    const { controller } = build();
+    await expect(controller.deleteProgress(makeAbsUser({ id: 8 }), 'not-an-id')).rejects.toMatchObject({});
+  });
+
+  it('404s when there was no progress to remove', async () => {
+    const { controller } = build(false);
+    await expect(controller.deleteProgress(makeAbsUser({ id: 8 }), 'usr_8-li_42')).rejects.toMatchObject({});
+  });
+});
+
+describe('AbsMeController stub stats endpoints', () => {
+  function build() {
+    return new AbsMeController(
+      {} as unknown as AbsProgressService,
+      {} as unknown as LibraryService,
+      {} as unknown as AbsCatalogService,
+      {} as unknown as AbsBookmarkService,
+    );
+  }
+
+  it('returns an empty per-item listening-sessions page echoing pagination params', () => {
+    expect(build().itemListeningSessions('li_42', { page: '2', itemsPerPage: '25' })).toEqual({
+      total: 0,
+      numPages: 0,
+      page: 2,
+      itemsPerPage: 25,
+      sessions: [],
+    });
+  });
+
+  it('404s per-item listening-sessions on a malformed library item id', () => {
+    expect(() => build().itemListeningSessions('nope', {})).toThrow();
+  });
+
+  it('returns zeroed listening stats', () => {
+    expect(build().listeningStats()).toMatchObject({ totalTime: 0, items: {}, recentSessions: [] });
+  });
+
+  it('returns zeroed year stats with array buckets', () => {
+    expect(build().statsForYear()).toMatchObject({
+      totalListeningTime: 0,
+      topAuthors: [],
+      longestAudiobookFinished: null,
+      finishedBooksWithCovers: [],
+    });
+  });
+});
+
 describe('AbsMeController#me', () => {
   it('returns the current user with their media progress', async () => {
     const { controller, progressService } = build([{ id: 'mp1' }], [3]);

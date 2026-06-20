@@ -198,6 +198,15 @@ export class AbsProgressService {
     return rows.map((r) => r.bookId);
   }
 
+  /** Delete a user's progress for one book. Returns false when there was no row to remove (→ 404). */
+  async deleteProgress(userId: number, bookId: number): Promise<boolean> {
+    const deleted = await this.db
+      .delete(schema.audiobookProgress)
+      .where(and(eq(schema.audiobookProgress.userId, userId), eq(schema.audiobookProgress.bookId, bookId)))
+      .returning({ bookId: schema.audiobookProgress.bookId });
+    return deleted.length > 0;
+  }
+
   /** Build ABS MediaProgress for a book, resolving the owning library automatically. */
   async getMediaProgressByBook(userId: number, bookId: number): Promise<Record<string, unknown> | null> {
     const libraryId = await this.readRepo.libraryIdForBook(bookId);

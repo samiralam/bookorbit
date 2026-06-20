@@ -67,13 +67,13 @@ These belong to controllers that already exist; the slice is incomplete.
 ### Current user (`/me`)
 
 - [x] `GET /me/listening-sessions` — returns an empty ABS history page (BookOrbit keeps no ABS-shaped session history); satisfies clients (e.g. Prologue) that probe it on connect
-- [ ] `GET /me/item/listening-sessions/:libraryItemId/:episodeId?` (episode param N/A — BookOrbit items have no episodes)
-- [ ] `GET /me/listening-stats`
-- [ ] `GET /me/progress/:id/remove-from-continue-listening`
-- [ ] `DELETE /me/progress/:id`
+- [x] `GET /me/item/listening-sessions/:libraryItemId/:episodeId?` — empty page (same rationale as `listening-sessions`); decodes the item id to 404 on garbage (episode param N/A — BookOrbit items have no episodes)
+- [x] `GET /me/listening-stats` — zeroed stats envelope (no per-session history retained)
+- [ ] `GET /me/progress/:id/remove-from-continue-listening` — needs a `hideFromContinueListening` column on `audiobook_progress` (mapper currently hardcodes `false`); defer to its own migration PR
+- [x] `DELETE /me/progress/:id` — deletes the `audiobook_progress` row via `AbsProgressService#deleteProgress`; accepts the composite `usr_<u>-li_<b>` id (or bare `li_<b>`), verifies the user segment, 404 when absent
 - [ ] `PATCH /me/password`
 - [ ] `GET /me/series/:id/remove-from-continue-listening` / `readd-to-continue-listening`
-- [ ] `GET /me/stats/year/:year`
+- [x] `GET /me/stats/year/:year` — zeroed year-in-review envelope (no per-session history retained)
 - [ ] `POST /me/ereader-devices`
 
 ### Sessions (admin side)
