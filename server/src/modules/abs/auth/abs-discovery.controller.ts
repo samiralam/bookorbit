@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, Inject, Post, UseFilters } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { hash } from 'bcryptjs';
 import { count, eq, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
@@ -23,6 +24,7 @@ interface AbsInitBody {
  */
 @Public()
 @UseFilters(AbsExceptionFilter)
+@SkipThrottle()
 @Controller()
 export class AbsDiscoveryController {
   constructor(

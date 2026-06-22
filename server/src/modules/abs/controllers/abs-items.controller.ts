@@ -1,5 +1,6 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res, UseFilters, UseGuards } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { SkipThrottle } from '@nestjs/throttler';
 import { ZipArchive } from 'archiver';
 import { createReadStream } from 'fs';
 import { readdir, stat } from 'fs/promises';
@@ -33,6 +34,7 @@ function attachmentDisposition(filename: string): string {
 /** Item detail + cover (REIMPLEMENTATION_GUIDE §5). Cover is unauthenticated (in the ignore list). */
 @Public()
 @UseFilters(AbsExceptionFilter)
+@SkipThrottle()
 @Controller('api/items')
 export class AbsItemsController {
   private readonly appDataPath: string;

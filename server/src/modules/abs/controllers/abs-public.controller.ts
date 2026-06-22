@@ -1,4 +1,5 @@
 import { Controller, Get, Param, Req, Res, UseFilters } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { Public } from '../../../common/decorators/public.decorator';
@@ -13,6 +14,7 @@ import { AbsStreamService } from '../services/abs-stream.service';
  */
 @Public()
 @UseFilters(AbsExceptionFilter)
+@SkipThrottle()
 @Controller('public/session')
 export class AbsPublicController {
   constructor(

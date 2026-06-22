@@ -1,4 +1,5 @@
 import { Controller, Get, Param, Query, UseFilters, UseGuards } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { Public } from '../../../common/decorators/public.decorator';
@@ -13,6 +14,7 @@ import { AbsCatalogService } from '../services/abs-catalog.service';
 @Public()
 @UseGuards(AbsAuthGuard)
 @UseFilters(AbsExceptionFilter)
+@SkipThrottle()
 @Controller('api/authors')
 export class AbsAuthorsController {
   constructor(private readonly catalogService: AbsCatalogService) {}

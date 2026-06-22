@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, Param, Post, UseFilters, UseGuards } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { Public } from '../../../common/decorators/public.decorator';
@@ -11,6 +12,7 @@ import { AbsPlaybackService, type LocalSessionBody, type SyncBody } from '../ser
 @Public()
 @UseGuards(AbsAuthGuard)
 @UseFilters(AbsExceptionFilter)
+@SkipThrottle()
 @Controller('api/session')
 export class AbsSessionsController {
   constructor(private readonly playbackService: AbsPlaybackService) {}

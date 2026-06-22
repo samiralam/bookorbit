@@ -1,4 +1,5 @@
 import { Controller, Get, UseFilters, UseGuards } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 
 import { Public } from '../../../common/decorators/public.decorator';
 import { AbsExceptionFilter } from '../abs-exception.filter';
@@ -11,6 +12,7 @@ import { AbsAuthGuard } from '../auth/abs-auth.guard';
 @Public()
 @UseGuards(AbsAuthGuard)
 @UseFilters(AbsExceptionFilter)
+@SkipThrottle()
 @Controller('api/playlists')
 export class AbsPlaylistsController {
   @Get()

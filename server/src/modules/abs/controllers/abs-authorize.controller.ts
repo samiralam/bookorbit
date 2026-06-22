@@ -1,4 +1,5 @@
 import { Controller, HttpCode, Post, Req, UseFilters, UseGuards } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { FastifyRequest } from 'fastify';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
@@ -21,6 +22,7 @@ import { AbsProgressService } from '../services/abs-progress.service';
 @Public()
 @UseGuards(AbsAuthGuard)
 @UseFilters(AbsExceptionFilter)
+@SkipThrottle()
 @Controller('api/authorize')
 export class AbsAuthorizeController {
   constructor(

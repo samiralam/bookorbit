@@ -1,4 +1,5 @@
 import { Controller, Get, Param, Query, UseFilters, UseGuards } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { Public } from '../../../common/decorators/public.decorator';
@@ -20,6 +21,7 @@ function toInt(value: string | undefined, fallback: number): number {
 @Public()
 @UseGuards(AbsAuthGuard)
 @UseFilters(AbsExceptionFilter)
+@SkipThrottle()
 @Controller('api/libraries')
 export class AbsLibrariesController {
   constructor(

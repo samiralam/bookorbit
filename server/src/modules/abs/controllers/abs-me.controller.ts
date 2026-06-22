@@ -15,6 +15,7 @@ import {
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { Permission } from '@bookorbit/types';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
@@ -54,6 +55,7 @@ const PASSWORD_COMPLEXITY = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/;
 @Public()
 @UseGuards(AbsAuthGuard)
 @UseFilters(AbsExceptionFilter)
+@SkipThrottle()
 @Controller('api/me')
 export class AbsMeController {
   constructor(

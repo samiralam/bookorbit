@@ -1,4 +1,5 @@
 import { Controller, Get, Param, Res, UseFilters } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { createReadStream } from 'fs';
 import type { FastifyReply } from 'fastify';
 
@@ -19,6 +20,7 @@ const SEGMENT_CONTENT_TYPE = 'video/mp2t';
  */
 @Public()
 @UseFilters(AbsExceptionFilter)
+@SkipThrottle()
 @Controller('hls')
 export class AbsHlsController {
   constructor(private readonly transcodeService: AbsTranscodeService) {}
