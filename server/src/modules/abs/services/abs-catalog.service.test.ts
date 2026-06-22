@@ -101,6 +101,16 @@ describe('AbsCatalogService#listLibraryItems', () => {
     await service.listLibraryItems(makeAbsUser(), 5, { ...query, limit: 0, page: 3 });
     expect(readRepo.listItems).toHaveBeenCalledWith(expect.objectContaining({ offset: 0 }));
   });
+
+  it('always emits minified item media regardless of the query minified flag (matches ABS getLibraryItems)', async () => {
+    const { service } = build({ listItems: { rows: [item()], total: 1 } });
+    const result = await service.listLibraryItems(makeAbsUser(), 5, { ...query, minified: false });
+    const media = (result.results as Array<{ media: Record<string, unknown> }>)[0].media;
+    // Minified Book shape carries these counts; the expanded shape Prologue cannot decode does not.
+    expect(media).toHaveProperty('numAudioFiles');
+    expect(media).toHaveProperty('numChapters');
+    expect(media).not.toHaveProperty('audioFiles');
+  });
 });
 
 describe('AbsCatalogService#getLibraryItem', () => {

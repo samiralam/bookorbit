@@ -148,8 +148,11 @@ export class AbsCatalogService {
     const relations = await this.relationsFor(rows);
     const progressByBook = await this.progressMap(user.id, rows);
 
+    // ABS's getLibraryItems always serializes list rows via toOldJSONMinified() regardless of the
+    // `minified` query param; Prologue decodes this list with its minified Book model (requires
+    // numAudioFiles/numChapters), so the expanded shape fails strict Codable and empties the library.
     const results = rows.map((row) =>
-      toAbsLibraryItem(row, relations.get(row.id)!, { minified: query.minified, mediaProgress: progressByBook.get(row.id) ?? null }),
+      toAbsLibraryItem(row, relations.get(row.id)!, { minified: true, mediaProgress: progressByBook.get(row.id) ?? null }),
     );
 
     return {
@@ -225,7 +228,9 @@ export class AbsCatalogService {
 
     const bookIds = [...new Set(pageSeries.flatMap((s) => s.books.map((b) => b.bookId)))];
     const rows = await this.readRepo.findItemsByIds(bookIds);
-    const itemsByBook = new Map((await this.assembleItems(user.id, rows, query.minified)).map((it, i) => [rows[i].id, it]));
+    // ABS serializes series books via toOldJSONMinified() (seriesFilters.getFilteredSeries),
+    // regardless of the request's `minified` flag — match it so Prologue's minified decode succeeds.
+    const itemsByBook = new Map((await this.assembleItems(user.id, rows, true)).map((it, i) => [rows[i].id, it]));
 
     const results = pageSeries.map((s) => ({
       id: encodeAbsId('series', s.id),
@@ -250,7 +255,9 @@ export class AbsCatalogService {
 
     const bookIds = [...new Set(page.flatMap((c) => c.bookIds))];
     const rows = await this.readRepo.findItemsByIds(bookIds);
-    const itemsByBook = new Map((await this.assembleItems(user.id, rows, query.minified)).map((it, i) => [rows[i].id, it]));
+    // ABS serializes collection books via toOldJSONExpanded() (Collection.toOldJSONExpanded),
+    // regardless of the request's `minified` flag — match it for a consistent strict-decode shape.
+    const itemsByBook = new Map((await this.assembleItems(user.id, rows, false)).map((it, i) => [rows[i].id, it]));
 
     const results = page.map((c) => ({
       id: encodeAbsId('collection', c.id),
