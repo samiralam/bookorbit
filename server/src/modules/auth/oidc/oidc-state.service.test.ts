@@ -2,11 +2,16 @@ import { OidcStateService } from './oidc-state.service';
 
 const mockConfig = { get: vi.fn().mockReturnValue(undefined) };
 
+/** `values()` returns an `onConflictDoUpdate`-chainable to mirror the idempotent upsert in `generate`. */
+function makeValuesMock() {
+  return vi.fn().mockReturnValue({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) });
+}
+
 function makeDb(overrides: Partial<ReturnType<typeof makeDb>> = {}) {
   const deleteMock = vi.fn().mockReturnThis();
   const db = {
     delete: vi.fn().mockReturnValue({ where: deleteMock }),
-    insert: vi.fn().mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) }),
+    insert: vi.fn().mockReturnValue({ values: makeValuesMock() }),
     ...overrides,
   };
   return { db, deleteMock };
@@ -36,7 +41,7 @@ describe('OidcStateService', () => {
     });
 
     it('inserts state with meta=null when no meta passed', async () => {
-      const valuesMock = vi.fn().mockResolvedValue(undefined);
+      const valuesMock = makeValuesMock();
       const insertMock = vi.fn().mockReturnValue({ values: valuesMock });
       const db = {
         delete: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) }),
@@ -54,7 +59,7 @@ describe('OidcStateService', () => {
     });
 
     it('inserts state with serialized meta when meta passed', async () => {
-      const valuesMock = vi.fn().mockResolvedValue(undefined);
+      const valuesMock = makeValuesMock();
       const insertMock = vi.fn().mockReturnValue({ values: valuesMock });
       const db = {
         delete: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) }),
@@ -70,7 +75,7 @@ describe('OidcStateService', () => {
     });
 
     it('inserts state into the database with an expiry', async () => {
-      const valuesMock = vi.fn().mockResolvedValue(undefined);
+      const valuesMock = makeValuesMock();
       const insertMock = vi.fn().mockReturnValue({ values: valuesMock });
       const db = {
         delete: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) }),
@@ -92,7 +97,7 @@ describe('OidcStateService', () => {
       const whereMock = vi.fn().mockResolvedValue(undefined);
       const db = {
         delete: vi.fn().mockReturnValue({ where: whereMock }),
-        insert: vi.fn().mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) }),
+        insert: vi.fn().mockReturnValue({ values: makeValuesMock() }),
       };
       const service = new OidcStateService(db as never, mockConfig as never);
 
@@ -103,7 +108,7 @@ describe('OidcStateService', () => {
     });
 
     it('uses an explicit state value when provided (ABS mobile preserves the client state)', async () => {
-      const valuesMock = vi.fn().mockResolvedValue(undefined);
+      const valuesMock = makeValuesMock();
       const db = {
         delete: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) }),
         insert: vi.fn().mockReturnValue({ values: valuesMock }),
@@ -114,6 +119,27 @@ describe('OidcStateService', () => {
 
       expect(state).toBe('client-supplied-state');
       expect(valuesMock.mock.calls[0][0].state).toBe('client-supplied-state');
+    });
+
+    it('upserts on the state primary key so a replayed pinned state does not collide', async () => {
+      // iOS ABS clients re-issue the /auth/openid navigation with the same client `state`; a plain
+      // insert would throw a PK violation that surfaces as a blank "openid" page. The row must be
+      // refreshed (onConflictDoUpdate) instead.
+      const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
+      const valuesMock = vi.fn().mockReturnValue({ onConflictDoUpdate });
+      const db = {
+        delete: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) }),
+        insert: vi.fn().mockReturnValue({ values: valuesMock }),
+      };
+      const service = new OidcStateService(db as never, mockConfig as never);
+
+      await service.generate(7, { mode: 'abs' }, 'replayed-state');
+
+      expect(onConflictDoUpdate).toHaveBeenCalledOnce();
+      const [{ target, set }] = onConflictDoUpdate.mock.calls[0];
+      expect(target).toBeDefined();
+      expect(set.providerId).toBe(7);
+      expect(JSON.parse(set.meta as string)).toEqual({ mode: 'abs' });
     });
   });
 

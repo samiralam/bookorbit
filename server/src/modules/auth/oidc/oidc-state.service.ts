@@ -27,10 +27,19 @@ export class OidcStateService {
   async generate(providerId: number, meta?: Record<string, unknown>, explicitState?: string): Promise<string> {
     const state = explicitState ?? randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + this.ttlMs);
+    const metaJson = meta ? JSON.stringify(meta) : null;
 
     await Promise.all([
       this.db.delete(schema.oidcStates).where(lt(schema.oidcStates.expiresAt, new Date())),
-      this.db.insert(schema.oidcStates).values({ state, providerId, expiresAt, meta: meta ? JSON.stringify(meta) : null }),
+      // Upsert on the `state` primary key. A caller-pinned `explicitState` (the ABS mobile flow
+      // round-trips the client's `state`) can be replayed within the TTL — iOS clients re-issue the
+      // `/auth/openid` navigation with the same state — and a plain insert would throw a PK violation,
+      // which the ABS filter surfaces as an empty-body 500 that iOS renders as a blank "openid" file.
+      // Refreshing the row keeps the latest authorize attempt authoritative.
+      this.db
+        .insert(schema.oidcStates)
+        .values({ state, providerId, expiresAt, meta: metaJson })
+        .onConflictDoUpdate({ target: schema.oidcStates.state, set: { providerId, expiresAt, meta: metaJson } }),
     ]);
 
     return state;
