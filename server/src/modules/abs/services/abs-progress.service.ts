@@ -143,6 +143,11 @@ export class AbsProgressService {
       lastUpdate: updatedMs,
       startedAt: updatedMs,
       finishedAt: isFinished ? updatedMs : null,
+      // ABS MediaProgress carries non-nullable createdAt/updatedAt; omitting them fails Prologue's
+      // strict decode of /api/me, which silently blanks the whole library. BookOrbit tracks only one
+      // timestamp on the progress row, so both mirror it (as startedAt/lastUpdate already do).
+      createdAt: updatedMs,
+      updatedAt: updatedMs,
     };
   }
 

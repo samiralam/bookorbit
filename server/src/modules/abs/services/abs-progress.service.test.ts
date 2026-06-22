@@ -1,4 +1,5 @@
 import { AbsProgressService } from './abs-progress.service';
+import * as schema from '../../../db/schema';
 import type { AbsAudioFileRow } from '../abs-read.repository';
 
 function file(id: number, durationSeconds: number): AbsAudioFileRow {
@@ -38,5 +39,53 @@ describe('AbsProgressService progress math', () => {
 
   it('returns null when there are no audio files', () => {
     expect(AbsProgressService.resolveFileAndOffset([], 10)).toBeNull();
+  });
+});
+
+describe('AbsProgressService#toMediaProgress shape', () => {
+  // Stub deps: toMediaProgress is pure given its args and touches neither.
+  const service = new AbsProgressService(undefined as never, undefined as never);
+  const row = {
+    userId: 3,
+    bookId: 427,
+    percentage: 1,
+    currentFileId: 10,
+    positionSeconds: 30,
+    updatedAt: new Date('2026-06-01T00:00:00Z'),
+  } as schema.AudiobookProgress;
+
+  // Regression: ABS MediaProgress carries non-nullable createdAt/updatedAt. Omitting them fails
+  // Prologue's strict Codable decode of /api/me and silently blanks the entire library.
+  it('emits every key ABS MediaProgress requires, incl. createdAt/updatedAt', () => {
+    const progress = (
+      service as unknown as {
+        toMediaProgress: (b: number, r: schema.AudiobookProgress, f: AbsAudioFileRow[], p: number) => Record<string, unknown>;
+      }
+    ).toMediaProgress(427, row, [file(10, 100), file(11, 200)], 98);
+
+    expect(Object.keys(progress).sort()).toEqual(
+      [
+        'createdAt',
+        'currentTime',
+        'duration',
+        'ebookLocation',
+        'ebookProgress',
+        'episodeId',
+        'finishedAt',
+        'hideFromContinueListening',
+        'id',
+        'isFinished',
+        'lastUpdate',
+        'libraryItemId',
+        'mediaItemId',
+        'mediaItemType',
+        'progress',
+        'startedAt',
+        'updatedAt',
+      ].sort(),
+    );
+    const updatedMs = row.updatedAt.getTime();
+    expect(progress.createdAt).toBe(updatedMs);
+    expect(progress.updatedAt).toBe(updatedMs);
   });
 });

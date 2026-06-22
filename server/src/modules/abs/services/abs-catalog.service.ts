@@ -280,18 +280,14 @@ export class AbsCatalogService {
     };
   }
 
-  /** `GET /api/libraries/:id/authors` — authors with a book in the library (author-centric clients). */
   /**
-   * `GET /api/libraries/:id/authors`. ABS returns two different shapes: a paginated `{ results, … }`
-   * envelope when the request carries numeric `limit`+`page` (author-centric clients like Prologue
-   * always do, and read `.results`), otherwise a bare `{ authors }`. Returning `{ authors }` to a
-   * paginated request makes those clients see an empty library. Mirrors `LibraryController.getAuthors`.
+   * `GET /api/libraries/:id/authors` — authors with a book in the library. ABS always returns a bare
+   * `{ authors }` envelope and ignores limit/page; author-centric clients (Prologue) send
+   * limit=50&page=0 but read the `authors` key, so a paginated `{ results }` envelope leaves them
+   * showing an empty library. Mirrors `LibraryController.getAuthors`.
    */
   async listAuthors(user: RequestUser, libraryId: number): Promise<Record<string, unknown>> {
     await this.assertLibraryAccess(user, libraryId);
-    // ABS's GET /api/libraries/:id/authors always returns a bare { authors } envelope and ignores
-    // limit/page — author-centric clients (Prologue) send limit=50&page=0 but read the `authors`
-    // key, so a paginated { results } envelope leaves them showing an empty library.
     const authors = (await this.readRepo.authorsInLibrary(libraryId)).map(toAbsAuthor);
     return { authors };
   }
