@@ -186,6 +186,10 @@ export function toAbsLibraryItem(item: AbsItemRow, rel: AbsItemRelations, opts: 
   const result: Record<string, unknown> = {
     id: libraryItemId,
     ino: String(item.id),
+    // ABS always emits oldLibraryItemId (null when absent). Swift's `decode(String?.self, forKey:)`
+    // throws on a MISSING key even though it accepts an explicit null, so omitting it makes strict
+    // clients (Prologue) silently drop every item — empty grid, no cover fetches. Always send it.
+    oldLibraryItemId: null,
     libraryId: encodeAbsId('library', item.libraryId),
     folderId: '',
     path: '',

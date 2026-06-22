@@ -232,13 +232,20 @@ export class AbsCatalogService {
     // regardless of the request's `minified` flag — match it so Prologue's minified decode succeeds.
     const itemsByBook = new Map((await this.assembleItems(user.id, rows, true)).map((it, i) => [rows[i].id, it]));
 
+    // Shape mirrors ABS Series.toOldJSON (id, name, nameIgnorePrefix, description, addedAt,
+    // updatedAt, libraryId) so strict clients decode each series; BookOrbit has no series
+    // description/timestamps, so those are null/0 (the keys must be present, values may be empty).
+    const libraryAbsId = encodeAbsId('library', libraryId);
     const results = pageSeries.map((s) => ({
       id: encodeAbsId('series', s.id),
       name: s.name,
       nameIgnorePrefix: s.name,
+      description: null,
+      libraryId: libraryAbsId,
       libraryItemIds: s.books.map((b) => encodeAbsId('libraryItem', b.bookId)),
       books: s.books.map((b) => itemsByBook.get(b.bookId)).filter((it): it is Record<string, unknown> => it != null),
       addedAt: 0,
+      updatedAt: 0,
       totalDuration: 0,
     }));
 

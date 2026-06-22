@@ -42,6 +42,10 @@ describe('toAbsLibraryItem', () => {
     expect(item.ino).toBe('3');
     expect(item.libraryId).toBe('lib_5');
     expect(item.mediaType).toBe('book');
+    // ABS always emits oldLibraryItemId (null); omitting the key makes Swift's decode(String?.self)
+    // throw on absence, so strict clients (Prologue) silently drop every item. Must be present.
+    expect('oldLibraryItemId' in item).toBe(true);
+    expect(item.oldLibraryItemId).toBeNull();
 
     const media = item.media as Record<string, unknown>;
     expect(media.id).toBe('bk_3');

@@ -21,6 +21,10 @@ describe('toAbsLibrary', () => {
     expect(lib.displayOrder).toBe(2);
     expect(lib.createdAt).toBe(createdAt.getTime());
     expect(lib.folders).toEqual([{ id: '11', fullPath: '/data/audiobooks', libraryId: 'lib_5', addedAt: createdAt.getTime() }]);
+    // ABS Library.toOldJSON always carries lastScan/lastScanVersion; strict clients may read a null
+    // lastScan as "never scanned" and hide content, so we mirror updatedAt as the effective scan.
+    expect(lib.lastScan).toBe(createdAt.getTime());
+    expect(lib.lastScanVersion).toEqual(expect.any(String));
   });
 
   it('maps a square cover aspect ratio to flag 0 and a standard one to flag 1', () => {

@@ -1,4 +1,4 @@
-import { ABS_MEDIA_TYPE_BOOK } from '../abs.constants';
+import { ABS_MEDIA_TYPE_BOOK, ABS_SERVER_VERSION } from '../abs.constants';
 import { encodeAbsId } from '../abs-id.util';
 
 interface LibraryFolderLike {
@@ -51,6 +51,10 @@ export function toAbsLibrary(library: LibraryLike): Record<string, unknown> {
       skipMatchingMediaWithIsbn: false,
       autoScanCronExpression: null,
     },
+    // ABS Library.toOldJSON always carries these; a null lastScan can read as "never scanned" to
+    // strict clients. BookOrbit has no scan concept, so mirror updatedAt as the effective last scan.
+    lastScan: toEpochMs(library.updatedAt) || null,
+    lastScanVersion: ABS_SERVER_VERSION,
     createdAt: toEpochMs(library.createdAt),
     lastUpdate: toEpochMs(library.updatedAt),
   };
