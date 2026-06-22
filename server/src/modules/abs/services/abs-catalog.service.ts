@@ -287,27 +287,13 @@ export class AbsCatalogService {
    * always do, and read `.results`), otherwise a bare `{ authors }`. Returning `{ authors }` to a
    * paginated request makes those clients see an empty library. Mirrors `LibraryController.getAuthors`.
    */
-  async listAuthors(user: RequestUser, libraryId: number, query: Record<string, string> = {}): Promise<Record<string, unknown>> {
+  async listAuthors(user: RequestUser, libraryId: number): Promise<Record<string, unknown>> {
     await this.assertLibraryAccess(user, libraryId);
+    // ABS's GET /api/libraries/:id/authors always returns a bare { authors } envelope and ignores
+    // limit/page — author-centric clients (Prologue) send limit=50&page=0 but read the `authors`
+    // key, so a paginated { results } envelope leaves them showing an empty library.
     const authors = (await this.readRepo.authorsInLibrary(libraryId)).map(toAbsAuthor);
-
-    const isPaginated = query.limit != null && query.limit !== '' && !Number.isNaN(Number(query.limit)) && !Number.isNaN(Number(query.page));
-    if (!isPaginated) return { authors };
-
-    const limit = Number(query.limit);
-    const page = Number(query.page);
-    const start = limit > 0 ? page * limit : 0;
-    return {
-      results: limit > 0 ? authors.slice(start, start + limit) : authors,
-      total: authors.length,
-      limit,
-      page,
-      sortBy: query.sort,
-      sortDesc: query.desc === '1',
-      filterBy: query.filter,
-      minified: query.minified === '1',
-      include: query.include ?? '',
-    };
+    return { authors };
   }
 
   /** `GET /api/authors/:id` — one author; `?include=items,series` eager-loads the author's books. */

@@ -141,7 +141,7 @@ describe('AbsCatalogService#listAuthors', () => {
     expect(await thrownStatus(() => service.listAuthors(makeAbsUser({ isSuperuser: false }), 5))).toBe(404);
   });
 
-  it('returns the bare { authors } envelope for a non-paginated request', async () => {
+  it('returns the bare { authors } envelope', async () => {
     const { service } = build({
       authorsInLibrary: [{ id: 1, name: 'Andy Weir', description: 'bio', numBooks: 2 }],
     });
@@ -149,37 +149,21 @@ describe('AbsCatalogService#listAuthors', () => {
     expect(result).toEqual({ authors: [expect.objectContaining({ id: 'aut_1', name: 'Andy Weir', numBooks: 2 })] });
   });
 
-  it('returns a paginated { results } envelope when limit+page are supplied (author-centric clients e.g. Prologue)', async () => {
+  // Regression: Prologue requests /authors?limit=50&page=0 but reads the `authors` key. ABS always
+  // returns { authors } here and ignores pagination — a { results } envelope leaves it empty.
+  it('always returns { authors } and never a paginated { results } envelope', async () => {
     const { service } = build({
       authorsInLibrary: [
         { id: 1, name: 'Andy Weir', description: null, numBooks: 2 },
         { id: 2, name: 'Brandon Sanderson', description: null, numBooks: 3 },
       ],
     });
-    const result = await service.listAuthors(makeAbsUser(), 5, { limit: '50', page: '0' });
-    expect(result.authors).toBeUndefined();
-    expect(result.total).toBe(2);
-    expect(result.limit).toBe(50);
-    expect(result.page).toBe(0);
-    expect(result.results).toHaveLength(2);
-    expect(result.results).toEqual([
+    const result = await service.listAuthors(makeAbsUser(), 5);
+    expect(result.results).toBeUndefined();
+    expect(result.authors).toEqual([
       expect.objectContaining({ id: 'aut_1', name: 'Andy Weir', lastFirst: 'Weir, Andy' }),
       expect.objectContaining({ id: 'aut_2', name: 'Brandon Sanderson', lastFirst: 'Sanderson, Brandon' }),
     ]);
-  });
-
-  it('slices the paginated results by limit and page', async () => {
-    const { service } = build({
-      authorsInLibrary: [
-        { id: 1, name: 'A A', description: null, numBooks: 1 },
-        { id: 2, name: 'B B', description: null, numBooks: 1 },
-        { id: 3, name: 'C C', description: null, numBooks: 1 },
-      ],
-    });
-    const result = await service.listAuthors(makeAbsUser(), 5, { limit: '2', page: '1' });
-    expect(result.total).toBe(3);
-    expect((result.results as unknown[]).length).toBe(1);
-    expect(result.results).toEqual([expect.objectContaining({ id: 'aut_3' })]);
   });
 });
 
