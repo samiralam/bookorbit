@@ -281,15 +281,33 @@ export class AbsCatalogService {
   }
 
   /**
-   * `GET /api/libraries/:id/authors` — authors with a book in the library. ABS always returns a bare
-   * `{ authors }` envelope and ignores limit/page; author-centric clients (Prologue) send
-   * limit=50&page=0 but read the `authors` key, so a paginated `{ results }` envelope leaves them
-   * showing an empty library. Mirrors `LibraryController.getAuthors`.
+   * `GET /api/libraries/:id/authors` — authors with a book in the library. Mirrors
+   * `LibraryController.getAuthors`: a `limit`+`page` request (author-centric clients like Prologue
+   * send `limit=50&page=0`) returns the paginated `{ results, … }` envelope and reads `.results`;
+   * otherwise a bare `{ authors }`.
    */
-  async listAuthors(user: RequestUser, libraryId: number): Promise<Record<string, unknown>> {
+  async listAuthors(user: RequestUser, libraryId: number, query: Record<string, string> = {}): Promise<Record<string, unknown>> {
     await this.assertLibraryAccess(user, libraryId);
-    const authors = (await this.readRepo.authorsInLibrary(libraryId)).map(toAbsAuthor);
-    return { authors };
+    const libraryAbsId = encodeAbsId('library', libraryId);
+    const authors = (await this.readRepo.authorsInLibrary(libraryId)).map((a) => toAbsAuthor(a, libraryAbsId));
+
+    const isPaginated = query.limit != null && query.limit !== '' && !Number.isNaN(Number(query.limit)) && !Number.isNaN(Number(query.page));
+    if (!isPaginated) return { authors };
+
+    const limit = Number(query.limit);
+    const page = Number(query.page);
+    const start = limit > 0 ? page * limit : 0;
+    return {
+      results: limit > 0 ? authors.slice(start, start + limit) : authors,
+      total: authors.length,
+      limit,
+      page,
+      sortBy: query.sort,
+      sortDesc: query.desc === '1',
+      filterBy: query.filter,
+      minified: query.minified === '1',
+      include: query.include ?? '',
+    };
   }
 
   /** `GET /api/authors/:id` — one author; `?include=items,series` eager-loads the author's books. */
@@ -297,7 +315,10 @@ export class AbsCatalogService {
     const author = await this.readRepo.findAuthor(authorId);
     if (!author) throw AbsHttpException.notFound();
 
-    const result = toAbsAuthor(author);
+    // BookOrbit authors are global; surface the library of any of the author's books so the ABS
+    // Author object carries the non-optional libraryId strict clients require.
+    const authorLibraryId = await this.readRepo.libraryIdForAuthor(authorId);
+    const result = toAbsAuthor(author, authorLibraryId != null ? encodeAbsId('library', authorLibraryId) : '');
     if (include.includes('items')) {
       const bookIds = await this.readRepo.bookIdsForAuthor(authorId);
       const libraryItems = await this.itemsForBookIds(user, bookIds, true);

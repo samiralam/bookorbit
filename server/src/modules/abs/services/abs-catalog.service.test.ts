@@ -44,6 +44,7 @@ interface BuildOpts {
   authorsInLibrary?: { id: number; name: string; description: string | null; numBooks: number }[];
   findAuthor?: { id: number; name: string; description: string | null } | null;
   bookIdsForAuthor?: number[];
+  libraryIdForAuthor?: number | null;
 }
 
 function build(opts: BuildOpts = {}) {
@@ -61,6 +62,7 @@ function build(opts: BuildOpts = {}) {
     authorsInLibrary: vi.fn().mockResolvedValue(opts.authorsInLibrary ?? []),
     findAuthor: vi.fn().mockResolvedValue(opts.findAuthor === undefined ? { id: 1, name: 'Andy Weir', description: null } : opts.findAuthor),
     bookIdsForAuthor: vi.fn().mockResolvedValue(opts.bookIdsForAuthor ?? []),
+    libraryIdForAuthor: vi.fn().mockResolvedValue(opts.libraryIdForAuthor === undefined ? 5 : opts.libraryIdForAuthor),
   } as unknown as AbsReadRepository;
   const progressService = {
     listMediaProgressForUser: vi.fn().mockResolvedValue([]),
@@ -141,29 +143,47 @@ describe('AbsCatalogService#listAuthors', () => {
     expect(await thrownStatus(() => service.listAuthors(makeAbsUser({ isSuperuser: false }), 5))).toBe(404);
   });
 
-  it('returns the bare { authors } envelope', async () => {
+  it('returns the bare { authors } envelope for a non-paginated request, each carrying libraryId', async () => {
     const { service } = build({
       authorsInLibrary: [{ id: 1, name: 'Andy Weir', description: 'bio', numBooks: 2 }],
     });
     const result = await service.listAuthors(makeAbsUser(), 5);
-    expect(result).toEqual({ authors: [expect.objectContaining({ id: 'aut_1', name: 'Andy Weir', numBooks: 2 })] });
+    expect(result).toEqual({ authors: [expect.objectContaining({ id: 'aut_1', name: 'Andy Weir', numBooks: 2, libraryId: 'lib_5' })] });
   });
 
-  // Regression: Prologue requests /authors?limit=50&page=0 but reads the `authors` key. ABS always
-  // returns { authors } here and ignores pagination — a { results } envelope leaves it empty.
-  it('always returns { authors } and never a paginated { results } envelope', async () => {
+  // Regression: ABS returns the paginated { results } envelope when limit+page are present, and each
+  // author carries a non-optional libraryId. Prologue sends limit=50&page=0, reads `.results`, and
+  // strict-decodes the Author objects — a missing libraryId (or a bare { authors }) blanks the library.
+  it('returns a paginated { results } envelope with libraryId-bearing authors when limit+page supplied', async () => {
     const { service } = build({
       authorsInLibrary: [
         { id: 1, name: 'Andy Weir', description: null, numBooks: 2 },
         { id: 2, name: 'Brandon Sanderson', description: null, numBooks: 3 },
       ],
     });
-    const result = await service.listAuthors(makeAbsUser(), 5);
-    expect(result.results).toBeUndefined();
-    expect(result.authors).toEqual([
-      expect.objectContaining({ id: 'aut_1', name: 'Andy Weir', lastFirst: 'Weir, Andy' }),
-      expect.objectContaining({ id: 'aut_2', name: 'Brandon Sanderson', lastFirst: 'Sanderson, Brandon' }),
+    const result = await service.listAuthors(makeAbsUser(), 5, { limit: '50', page: '0' });
+    expect(result.authors).toBeUndefined();
+    expect(result.total).toBe(2);
+    expect(result.limit).toBe(50);
+    expect(result.page).toBe(0);
+    expect(result.results).toEqual([
+      expect.objectContaining({ id: 'aut_1', name: 'Andy Weir', lastFirst: 'Weir, Andy', libraryId: 'lib_5' }),
+      expect.objectContaining({ id: 'aut_2', name: 'Brandon Sanderson', lastFirst: 'Sanderson, Brandon', libraryId: 'lib_5' }),
     ]);
+  });
+
+  it('slices the paginated results by limit and page', async () => {
+    const { service } = build({
+      authorsInLibrary: [
+        { id: 1, name: 'A A', description: null, numBooks: 1 },
+        { id: 2, name: 'B B', description: null, numBooks: 1 },
+        { id: 3, name: 'C C', description: null, numBooks: 1 },
+      ],
+    });
+    const result = await service.listAuthors(makeAbsUser(), 5, { limit: '2', page: '1' });
+    expect(result.total).toBe(3);
+    expect((result.results as unknown[]).length).toBe(1);
+    expect(result.results).toEqual([expect.objectContaining({ id: 'aut_3' })]);
   });
 });
 

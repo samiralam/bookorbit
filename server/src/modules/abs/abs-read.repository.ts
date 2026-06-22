@@ -229,6 +229,17 @@ export class AbsReadRepository {
     return row?.libraryId ?? null;
   }
 
+  /** The library of any of the author's books (authors are global; ABS Authors carry a libraryId). */
+  async libraryIdForAuthor(authorId: number): Promise<number | null> {
+    const [row] = await this.db
+      .select({ libraryId: schema.books.libraryId })
+      .from(schema.bookAuthors)
+      .innerJoin(schema.books, eq(schema.books.id, schema.bookAuthors.bookId))
+      .where(eq(schema.bookAuthors.authorId, authorId))
+      .limit(1);
+    return row?.libraryId ?? null;
+  }
+
   /**
    * Translate a decoded ABS browse filter into a `books.id IN (...)` predicate. Supports the common
    * id/name groups; unknown or unsupported groups (e.g. per-user `progress`) yield `undefined` so the
