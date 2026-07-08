@@ -4,6 +4,15 @@
 **Symptom:** logging into the test instance from Prologue (iOS Audiobookshelf client) shows libraries
 but no books. Login works; libraries list works.
 
+> **2026-07-07 update — read "Session 2026-07-07" at the bottom first.** The `missing.authors` filter
+> is fixed+deployed+verified and did NOT fix it. Decisive new facts: (a) the sync DOES retry ~2s apart
+> (3–7×/app-launch — decode-failure tell-tale after all), (b) ShelfPlayerKit source (Prologue's kit;
+> confirmed by its base64-padding quirk) has been cloned and EVERY response body from today's capture
+> passes a programmatic simulation of its strict-Codable models — items, series, collections, authors,
+> `/api/me`, listening-sessions all decode and convert. Static analysis is exhausted. Next: stream the
+> device's OSLog (`io.rfk.ShelfPlayerKit`) via Console.app — the converters/API client log every skip
+> and failure with the reason.
+
 > **2026-06-22 update — the diagnosis has shifted. STOP hunting for a missing/mistyped item key.**
 > As of this session every response Prologue fetches (`/api/me`, `/api/libraries`, authors, per-author
 > `/items`, series, the envelopes) has been verified field-by-field against the ABS source and **decodes
@@ -280,8 +289,123 @@ filter, then ShelfPlayerKit source).
   by design; not the blocker.
 - Memory written: `abs-strict-codable-empty-library` (in the project memory dir).
 
+## Session 2026-07-07 — missing.\* fixed (not the cause); ShelfPlayerKit source analyzed; all shapes provably decode
+
+- **`missing.*` filter fix deployed + verified** (commit `208ce06a`, semantics in the "Known remaining
+  bug" section above). `filter=missing.authors` now returns 1 of 65 items — `li_385`, a real
+  author-less book **with an empty title** (data oddity worth fixing in the library, but Prologue
+  tolerates it: title `""` is non-nil). Library still empty, still zero cover requests.
+- **The retry loop IS present after all.** Timeline reconstruction of today's capture (5 app-launches,
+  752 requests): each launch runs the full author-centric sync (authors → 25×per-author items →
+  missing → series → collections → me → listening-sessions) then repeats it ~2s later, 3–7 times, then
+  goes idle. The 2026-06-22 "no retry loop" conclusion was wrong (passes 25s apart were misread).
+  ShelfPlayerKit requests carry `maxAttempts` (2–4) with ~2s spacing — these are failure retries.
+  So SOMETHING in the sync transaction fails every time.
+- **ShelfPlayerKit source cloned and analyzed** (`github.com/rasmuslos/ShelfPlayer`, full history, in
+  session scratchpad — re-clone as needed). Prologue is confirmed built on it: our captures show its
+  exact base64 quirks (`%3D%3D` padding on authors/series filters, raw unencoded narrator names).
+  Key mechanics learned:
+  - Item lists decode as `ResultResponse { total, results: [ItemPayload] }` then convert via
+    failable `Audiobook(payload:)` in `compactMap` → bad items are DROPPED silently (explains
+    zero-covers without decode errors); but a TYPE mismatch anywhere (e.g. `publishedYear` must be
+    String-or-null, `genres` is REQUIRED `[String]`, chapters `{id Int, start/end Double, title
+String}` all required) throws and fails the WHOLE response → retry.
+  - Conversion guards (current kit): media present, `numAudioFiles > 0`, libraryId, non-nil title.
+    All 1582 items in today's capture pass every guard.
+  - `MeResponse` requires `id/username/type/isActive/isLocked`; sessions envelope requires
+    `total/numPages/page/itemsPerPage/sessions`. Both verified present in our responses.
+- **Programmatic strict-Codable validation of today's ENTIRE capture: zero violations.** Script at
+  scratchpad `validate_payloads.py` (rewrite from this doc if lost): simulates decodeIfPresent
+  type-throwing for every ItemPayload/MediaPayload/MetadataPayload field over all items/series/
+  collections files (1582 items), plus authors list, /api/me, listening-sessions checked by hand.
+  All 752 bodies are valid JSON (no error/redirect bodies hiding in the dump).
+- **Interpretation:** against the CURRENT kit models nothing we send fails — yet the sync retries like
+  a decode failure. Either Prologue 10830 pins an older/stricter ShelfPlayerKit (private fork; public
+  repo has no Prologue refs) or the failure is app-level (persistence, not network decode).
+
+### 2026-07-07 evening — device logs obtained; ShelfPlayerKit attribution DISPROVEN
+
+Console.app stream from the iPhone (process filter `Prologue`, info+debug enabled):
+
+- **Prologue is NOT built on ShelfPlayerKit.** Its bundle id is `me.charlick.prismbooks`
+  (app group `group.me.charlick.prism.core`, internal name "Prism Books", dev "charlick") — no
+  `io.rfk.*` subsystems at all, and no ShelfPlayer/charlick cross-references in either codebase.
+  The earlier "confirmed via base64-padding quirk" inference was wrong (that padding is just
+  standard base64). All ShelfPlayerKit model analysis is now **non-binding** (still useful as a
+  reference for how Swift ABS clients decode, but not Prologue's actual models — those are
+  closed-source). The "2s retry = maxAttempts decode retry" interpretation loses its foundation too;
+  the repeating passes may just be Prologue's per-view refresh.
+- **Every request succeeds at the network layer on-device**: CFNetwork `summary for task success`,
+  `response_status=200` for the whole burst, no app-level error/decode logs whatsoever (the app
+  doesn't appear to log decode failures).
+- **Prologue applies persisted client-side list filters on every render**: constant pref reads of
+  `book-list-view-mode`, `book-list-ordering`, **`book-list-filters`** (domain `me.charlick.prismbooks`).
+  A stuck/non-default filter (e.g. Downloaded-only, In-progress) would render an EMPTY library with
+  zero cover fetches while all network traffic looks perfectly healthy — this now fits ALL evidence
+  and is the cheapest thing to check.
+
+### Next steps 2026-07-07 — in priority order (REVISED after device logs)
+
+1. **Check Prologue's client-side library filter/view settings (10 seconds).** In the library book
+   list, open the filter/sort control and clear any active filter (set to All); also try switching
+   view mode. If a filter was set, everything is explained. Also consider deleting + reinstalling
+   the app (or removing/re-adding the server connection) to reset `book-list-*` prefs and any stale
+   local sync DB.
+2. **Reference capture against real ABS** (unchanged) — run the local ABS clone with 1–2 audiobooks,
+   point Prologue at it through the capture proxy, verify books DO render, then byte-diff the same
+   endpoints against BookOrbit's responses. With Prologue closed-source this is the only remaining
+   systematic way to find what its models require.
+3. If #2 shows books render against real ABS, diff the response bodies field-by-field for the exact
+   same request sequence (the validator script in the scratchpad can be adapted to diff two captures).
+
+## Session 2026-07-07 (late) — REFERENCE CAPTURE DONE; Prologue works vs real ABS; concrete diffs found + FIXED
+
+Ran the local ABS clone (2.35.1) with 2 generated audiobooks (setup lives in the session scratchpad
+`abs-ref/`; ABS on :3333, capture proxy on :9001 — the user's old :9000 proxy pointed at bookorbit
+was still running, so `abs-capture/` got BOTH servers side-by-side; bookorbit's older captures are
+archived in `abs-capture/archive-bookorbit-2026-07-07/`). **Prologue rendered both authors and
+books and played audio against real ABS through the same proxy** — so the bug is in our response
+bodies, full stop. Sync sequence identical (author-centric), ran ONCE (no retry loop), and Prologue
+even issued an unfiltered `/items` + item-detail + `POST /api/session/local/all` — requests it
+never sent to BookOrbit.
+
+Key-path/type/value diff (script: scratchpad `diff_captures.py`) found these REAL deviations, all
+**fixed in this session** (uncommitted):
+
+1. **`/api/me` `token: null`** — live ABS always sends a real JWT string. PRIME SUSPECT: a
+   non-optional `token: String` decode fails on null, and `/api/me` was Prologue's most-refetched
+   endpoint (74–102×/day). Fix: `abs-me.controller.ts` echoes the caller's bearer via new
+   `legacyToken` extra in `abs-user.mapper.ts`.
+2. **`mediaProgress[].userId` missing** — ABS always sends it. Fix in `abs-progress.service.ts`.
+3. **`mediaProgress[].ebookProgress: null`** — live ABS sends a number (0 for audio; it coalesces
+   null→0 on write). Fix: emit 0.
+4. **`permissions.selectedTagsNotAccessible` missing** — added (false).
+5. **Library `settings` missing 8 keys** (audiobooksOnly, epubsAllowScriptedContent,
+   hideSingleBookSeries, onlyShowLaterBooksInContinueSeries, metadataPrecedence,
+   markAsFinishedPercentComplete, markAsFinishedTimeRemaining) — added with ABS defaults.
+6. **`icon: "Mic"`** — not a valid ABS icon; icons are a fixed lowercase set and enum decodes throw
+   on unknown values. Fix: `toAbsIcon()` whitelist/normalizer in `abs-library.mapper.ts`.
+7. **`settings.coverAspectRatio` was INVERTED** — ABS `BookCoverAspectRatio`: 0=standard 1.6:1,
+   1=square (we sent 0 for square). Fixed.
+8. **`displayOrder: 0`** — ABS is 1-based; now `bookorbit displayOrder + 1`.
+
+Also noted (NOT bugs): earlier "fix #1" added `createdAt`/`updatedAt` to mediaProgress claiming ABS
+requires them — live ABS 2.35.1 /api/me mediaProgress does NOT include them; left in as harmless
+extras. Our minified item lists carry extra keys ABS omits (metadata.authors/series/narrators
+arrays, media.libraryItemId, userMediaProgress, …) — harmless supersets, left alone.
+
+Tests updated (`abs-me.controller.test.ts`, `abs-library.mapper.test.ts`,
+`abs-progress.service.test.ts`); 282 ABS tests pass, typecheck clean.
+
+**Next: redeploy `bookorbit-test`, have Prologue re-sync the bookorbit connection (proxy :9000
+still up), and check for books + cover requests.** If STILL empty, the remaining lever is the
+side-by-side capture: same app session, both servers — diff `items_filtered` bodies value-by-value
+(not just shape), and consider stripping our extra superset keys to match ABS minified exactly.
+
 ## Don't re-do
 
 - Don't trust api.audiobookshelf.org for exact shapes — use the local ABS clone.
 - Don't change the authors envelope back to always-`{ authors }`.
 - Don't commit any captured bearer tokens or the `abs-capture/` dir (gitignored).
+- Don't re-verify response shapes against the CURRENT public ShelfPlayerKit models — done
+  programmatically 2026-07-07, zero violations (see Session 2026-07-07).

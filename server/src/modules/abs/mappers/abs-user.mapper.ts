@@ -13,6 +13,12 @@ export interface AbsUserExtras {
   librariesAccessible?: string[];
   accessToken?: string;
   refreshToken?: string | null;
+  /**
+   * Value for the legacy `token` field when `accessToken` isn't attached (e.g. `GET /api/me`).
+   * Live ABS 2.35.1 always sends a real token string here — a null fails clients that decode it
+   * as a non-optional String.
+   */
+  legacyToken?: string;
 }
 
 function has(user: RequestUser, permission: Permission): boolean {
@@ -34,6 +40,8 @@ function absPermissions(user: RequestUser): Record<string, boolean> {
     accessAllTags: true,
     accessExplicitContent: true,
     createEreader: false,
+    // ABS `tagsAreDenylist` — always present in live 2.35.1 payloads; BookOrbit has no tag ACLs.
+    selectedTagsNotAccessible: false,
   };
 }
 
@@ -48,7 +56,7 @@ export function toAbsUser(user: RequestUser, extras: AbsUserExtras = {}): Record
     username: user.username,
     email: user.email, // ABS sends this (nullable); strict clients (e.g. Prologue) require the key
     type: absUserType(user),
-    token: extras.accessToken ?? null, // legacy field; old clients read user.token
+    token: extras.accessToken ?? extras.legacyToken ?? null, // legacy field; old clients read user.token
     // ABS sets this flag in jwtAuthCheck to flag pre-2.26 tokens; we never issue old tokens.
     isOldToken: false,
     accessToken: extras.accessToken,

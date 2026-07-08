@@ -120,23 +120,31 @@ describe('AbsMeController stub stats endpoints', () => {
 });
 
 describe('AbsMeController#me', () => {
+  const meReq = { headers: { authorization: 'Bearer abs-jwt' } } as any;
+
   it('returns the current user with their media progress', async () => {
     const { controller, progressService } = build([{ id: 'mp1' }], [3]);
-    const user = await controller.me(makeAbsUser({ id: 8, isSuperuser: false }));
+    const user = await controller.me(makeAbsUser({ id: 8, isSuperuser: false }), meReq);
     expect(user.id).toBe('usr_8');
     expect(user.mediaProgress).toEqual([{ id: 'mp1' }]);
     expect(progressService.listMediaProgressForUser).toHaveBeenCalledWith(8);
   });
 
+  it('echoes the caller bearer as the legacy token (live ABS never sends null there)', async () => {
+    const { controller } = build([], [3]);
+    const user = await controller.me(makeAbsUser({ id: 8, isSuperuser: false }), meReq);
+    expect(user.token).toBe('abs-jwt');
+  });
+
   it('exposes encoded accessible library ids for scoped users', async () => {
     const { controller } = build([], [3, 7]);
-    const user = await controller.me(makeAbsUser({ isSuperuser: false }));
+    const user = await controller.me(makeAbsUser({ isSuperuser: false }), meReq);
     expect(user.librariesAccessible).toEqual(['lib_3', 'lib_7']);
   });
 
   it('hides the library list for superusers (empty array means "all")', async () => {
     const { controller } = build([], [3, 7]);
-    const user = await controller.me(makeAbsUser({ isSuperuser: true }));
+    const user = await controller.me(makeAbsUser({ isSuperuser: true }), meReq);
     expect(user.librariesAccessible).toEqual([]);
   });
 
@@ -147,7 +155,7 @@ describe('AbsMeController#me', () => {
     const bookmarkService = { listForUser: vi.fn().mockResolvedValue(bookmarks) } as unknown as AbsBookmarkService;
     const controller = new AbsMeController(progressService, libraryService, {} as unknown as AbsCatalogService, bookmarkService, noopAuthService);
 
-    const user = await controller.me(makeAbsUser({ id: 8 }));
+    const user = await controller.me(makeAbsUser({ id: 8 }), meReq);
     expect(user.bookmarks).toEqual(bookmarks);
   });
 });

@@ -127,6 +127,9 @@ export class AbsProgressService {
     const libraryItemId = encodeAbsId('libraryItem', bookId);
     return {
       id: `${encodeAbsId('user', row.userId)}-${libraryItemId}`,
+      // ABS MediaProgress always carries the owning user's id (verified against a live 2.35.1
+      // /api/me capture); strict clients may require it.
+      userId: encodeAbsId('user', row.userId),
       libraryItemId,
       episodeId: null,
       mediaItemId: encodeAbsId('book', bookId),
@@ -136,10 +139,12 @@ export class AbsProgressService {
       progress: isFinished ? 1 : progress,
       isFinished,
       hideFromContinueListening: false,
-      // ABS always emits these (null for audio); strict Codable clients (e.g. Prologue) decode the
-      // whole MediaProgress object and drop the entire item list if a required key is absent.
+      // ABS always emits these; strict Codable clients (e.g. Prologue) decode the whole
+      // MediaProgress object and drop the entire item list if a required key is absent. Live ABS
+      // 2.35.1 sends ebookLocation null but ebookProgress 0 for audio (it coalesces null to 0 on
+      // write), so a non-optional Double decode is satisfied only by the number.
       ebookLocation: null,
-      ebookProgress: null,
+      ebookProgress: 0,
       lastUpdate: updatedMs,
       startedAt: updatedMs,
       finishedAt: isFinished ? updatedMs : null,

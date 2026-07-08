@@ -27,7 +27,7 @@ import { LibraryService } from '../../library/library.service';
 import { AbsExceptionFilter } from '../abs-exception.filter';
 import { AbsHttpException } from '../abs-errors';
 import { ABS_ID_PREFIX, decodeAbsId, encodeAbsId } from '../abs-id.util';
-import { AbsAuthGuard } from '../auth/abs-auth.guard';
+import { AbsAuthGuard, extractAbsToken } from '../auth/abs-auth.guard';
 import { toAbsUser } from '../mappers/abs-user.mapper';
 import { AbsBookmarkService } from '../services/abs-bookmark.service';
 import { AbsCatalogService } from '../services/abs-catalog.service';
@@ -67,7 +67,7 @@ export class AbsMeController {
   ) {}
 
   @Get()
-  async me(@CurrentUser() user: RequestUser): Promise<Record<string, unknown>> {
+  async me(@CurrentUser() user: RequestUser, @Req() req: FastifyRequest): Promise<Record<string, unknown>> {
     const [mediaProgress, bookmarks, accessibleIds] = await Promise.all([
       this.progressService.listMediaProgressForUser(user.id),
       this.bookmarkService.listForUser(user.id),
@@ -77,6 +77,9 @@ export class AbsMeController {
       mediaProgress,
       bookmarks,
       librariesAccessible: user.isSuperuser ? [] : accessibleIds.map((id) => encodeAbsId('library', id)),
+      // Live ABS always sends a token string on /api/me; echo the caller's bearer so the legacy
+      // `token` field is never null (a null fails non-optional String decodes in strict clients).
+      legacyToken: extractAbsToken(req) ?? undefined,
     });
   }
 

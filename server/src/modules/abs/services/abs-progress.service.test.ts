@@ -82,10 +82,15 @@ describe('AbsProgressService#toMediaProgress shape', () => {
         'progress',
         'startedAt',
         'updatedAt',
+        'userId',
       ].sort(),
     );
     const updatedMs = row.updatedAt.getTime();
     expect(progress.createdAt).toBe(updatedMs);
     expect(progress.updatedAt).toBe(updatedMs);
+    // Verified against live ABS 2.35.1: userId is always present and ebookProgress is a number
+    // (0 for audio), never null — strict clients decode both.
+    expect(progress.userId).toBe(`usr_${row.userId}`);
+    expect(progress.ebookProgress).toBe(0);
   });
 });
