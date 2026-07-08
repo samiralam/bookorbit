@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, isNotNull, ne, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 
 import { DB } from '../../db';
 import * as schema from '../../db/schema';
@@ -298,9 +299,70 @@ export class AbsReadRepository {
           schema.books.id,
           this.db.select({ bookId: schema.bookMetadata.bookId }).from(schema.bookMetadata).where(eq(schema.bookMetadata.language, value)),
         );
+      case 'missing':
+        return this.missingWhere(value);
       default:
         return undefined;
     }
+  }
+
+  /**
+   * ABS `missing.<field>` — books lacking the given relation or metadata field
+   * (libraryItemsBookFilters: `missing.authors` is a left-join `authors.id IS NULL`; scalar fields
+   * match null-or-empty). Unknown fields yield `undefined` (no filtering), same as ABS.
+   */
+  private missingWhere(field: string): SQL | undefined {
+    switch (field) {
+      case 'authors':
+        return notInArray(schema.books.id, this.db.select({ bookId: schema.bookAuthors.bookId }).from(schema.bookAuthors));
+      case 'series':
+        return notInArray(schema.books.id, this.db.select({ bookId: schema.bookSeriesMemberships.bookId }).from(schema.bookSeriesMemberships));
+      case 'narrators':
+        return notInArray(schema.books.id, this.db.select({ bookId: schema.bookNarrators.bookId }).from(schema.bookNarrators));
+      case 'genres':
+        return notInArray(schema.books.id, this.db.select({ bookId: schema.bookGenres.bookId }).from(schema.bookGenres));
+      case 'tags':
+        return notInArray(schema.books.id, this.db.select({ bookId: schema.bookTags.bookId }).from(schema.bookTags));
+      case 'subtitle':
+        return this.missingMetadataText(schema.bookMetadata.subtitle);
+      case 'description':
+        return this.missingMetadataText(schema.bookMetadata.description);
+      case 'publisher':
+        return this.missingMetadataText(schema.bookMetadata.publisher);
+      case 'language':
+        return this.missingMetadataText(schema.bookMetadata.language);
+      case 'publishedYear':
+        return notInArray(
+          schema.books.id,
+          this.db.select({ bookId: schema.bookMetadata.bookId }).from(schema.bookMetadata).where(isNotNull(schema.bookMetadata.publishedYear)),
+        );
+      case 'isbn':
+        return notInArray(
+          schema.books.id,
+          this.db
+            .select({ bookId: schema.bookMetadata.bookId })
+            .from(schema.bookMetadata)
+            .where(
+              or(
+                and(isNotNull(schema.bookMetadata.isbn10), ne(schema.bookMetadata.isbn10, '')),
+                and(isNotNull(schema.bookMetadata.isbn13), ne(schema.bookMetadata.isbn13, '')),
+              ),
+            ),
+        );
+      default:
+        return undefined;
+    }
+  }
+
+  /** Books whose metadata row lacks the column (null/empty) or that have no metadata row at all. */
+  private missingMetadataText(column: AnyPgColumn): SQL {
+    return notInArray(
+      schema.books.id,
+      this.db
+        .select({ bookId: schema.bookMetadata.bookId })
+        .from(schema.bookMetadata)
+        .where(and(isNotNull(column), ne(column, ''))),
+    );
   }
 
   /** Title/author substring search within a library, capped at `limit` rows. */
