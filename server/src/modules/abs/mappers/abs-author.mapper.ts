@@ -8,7 +8,7 @@ export interface AbsAuthorRow {
 }
 
 /** ABS sorts/indexes authors by a "Last, First" key; mirror its basic split on the final space. */
-function toLastFirst(name: string): string {
+export function toLastFirst(name: string): string {
   const trimmed = name.trim();
   const idx = trimmed.lastIndexOf(' ');
   return idx === -1 ? trimmed : `${trimmed.slice(idx + 1)}, ${trimmed.slice(0, idx)}`;

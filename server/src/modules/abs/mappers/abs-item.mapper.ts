@@ -2,6 +2,7 @@ import { ABS_MEDIA_TYPE_BOOK } from '../abs.constants';
 import { encodeAbsId } from '../abs-id.util';
 import { audioMimeType, normalizeChapters, type AbsChapter } from '../abs-media.util';
 import type { AbsAudioFileRow, AbsItemRow } from '../abs-read.repository';
+import { toLastFirst } from './abs-author.mapper';
 
 export interface AbsItemRelations {
   authors: { id: number; name: string }[];
@@ -20,20 +21,26 @@ function basename(path: string): string {
   return idx === -1 ? path : path.slice(idx + 1);
 }
 
-/** ABS metadata block shared by expanded and minified item shapes. */
-function buildMetadata(item: AbsItemRow, rel: AbsItemRelations): Record<string, unknown> {
+/**
+ * ABS metadata block. The minified shape (`Book.oldMetadataToJSONMinified`) carries ONLY the
+ * flattened name strings — real ABS never emits the `authors`/`narrators`/`series` arrays there.
+ * Sending them as a "harmless superset" breaks strict Codable clients (Prologue): an optional
+ * `authors` property decoded with decodeIfPresent is skipped when the key is absent (real ABS) but
+ * THROWS when present with fewer keys than the client's Author model requires — dropping the whole
+ * item page. The expanded shape (`oldMetadataToJSONExpanded`) has arrays AND flattened strings.
+ */
+function buildMetadata(item: AbsItemRow, rel: AbsItemRelations, minified: boolean): Record<string, unknown> {
   const authorName = rel.authors.map((a) => a.name).join(', ');
-  return {
+  const flattened = {
     title: item.title ?? '',
     titleIgnorePrefix: item.title ?? '',
     subtitle: item.subtitle ?? null,
     authorName,
-    authorNameLF: authorName,
+    authorNameLF: rel.authors.map((a) => toLastFirst(a.name)).join(', '),
     narratorName: rel.narrators.map((n) => n.name).join(', '),
     seriesName: rel.series.map((s) => (s.sequence != null ? `${s.name} #${s.sequence}` : s.name)).join(', '),
-    authors: rel.authors.map((a) => ({ id: encodeAbsId('author', a.id), name: a.name })),
-    narrators: rel.narrators.map((n) => n.name),
-    series: rel.series.map((s) => ({ id: encodeAbsId('series', s.id), name: s.name, sequence: s.sequence != null ? String(s.sequence) : null })),
+  };
+  const shared = {
     genres: [],
     publishedYear: item.publishedYear != null ? String(item.publishedYear) : null,
     publishedDate: null,
@@ -44,6 +51,15 @@ function buildMetadata(item: AbsItemRow, rel: AbsItemRelations): Record<string, 
     language: item.language ?? null,
     explicit: false,
     abridged: false,
+  };
+  if (minified) return { ...flattened, ...shared };
+  return {
+    ...flattened,
+    authors: rel.authors.map((a) => ({ id: encodeAbsId('author', a.id), name: a.name })),
+    narrators: rel.narrators.map((n) => n.name),
+    series: rel.series.map((s) => ({ id: encodeAbsId('series', s.id), name: s.name, sequence: s.sequence != null ? String(s.sequence) : null })),
+    ...shared,
+    descriptionPlain: item.description != null ? item.description.replace(/<[^>]*>/g, '') : null,
   };
 }
 
@@ -148,24 +164,21 @@ export function toAbsLibraryItem(item: AbsItemRow, rel: AbsItemRelations, opts: 
   const duration = rel.audioFiles.reduce((sum, f) => sum + (f.durationSeconds ?? 0), 0);
   const size = rel.audioFiles.reduce((sum, f) => sum + (f.sizeBytes ?? 0), 0);
   const numTracks = rel.audioFiles.length;
-  const metadata = buildMetadata(item, rel);
+  const metadata = buildMetadata(item, rel, opts.minified ?? false);
   const coverPath = `/metadata/items/${item.id}/cover`;
   const chapters = buildItemChapters(item.chapters, duration);
 
+  // Minified media is EXACTLY ABS `Book.toOldJSONMinified`: no libraryItemId, no part counts
+  // (`ebookFormat` is omitted for audiobooks, matching ABS's undefined-key behavior).
   const media: Record<string, unknown> = opts.minified
     ? {
         id: bookAbsId,
-        libraryItemId,
         metadata,
         coverPath,
         tags: [],
         numTracks,
         numAudioFiles: numTracks,
         numChapters: chapters.length,
-        // ABS always emits these counts (0 here); strict Codable clients (e.g. Prologue) decode the
-        // whole minified media object and drop the entire item list if a required key is absent.
-        numMissingParts: 0,
-        numInvalidAudioFiles: 0,
         duration,
         size,
       }

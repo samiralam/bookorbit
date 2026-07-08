@@ -402,6 +402,48 @@ still up), and check for books + cover requests.** If STILL empty, the remaining
 side-by-side capture: same app session, both servers — diff `items_filtered` bodies value-by-value
 (not just shape), and consider stripping our extra superset keys to match ABS minified exactly.
 
+## Session 2026-07-08 — UUID-id hypothesis REFUTED; superset keys stripped to exact ABS minified shape
+
+**UUID-id hypothesis tested and killed.** Built `tools/abs-capture-proxy/abs-id-rewrite-proxy.mjs`
+(phone → :9002 id-rewriter → :9000 dump proxy → bookorbit-test): presents every prefixed id as a
+UUID-shaped string (`li_413` → `00000000-0003-4000-8000-…019d`) and reverse-maps ids in paths,
+query params, base64 `filter` values, and JSON request bodies. Proxy logs prove the test was valid —
+Prologue round-tripped the UUIDs through its whole pipeline (UUID library id in paths, UUID author
+ids inside base64 filters). **Still no books.** Prologue does NOT require UUID-parseable ids.
+
+**Sync-abort point located.** Comparing request sequences: against real ABS, Prologue runs the same
+per-author phase (authors list → per-author filtered items → missing.authors → series → collections
+→ listening-sessions) and then PROCEEDS to item detail (`/api/items/:id?expanded=1&include=authors,progress…`)
+and `POST /api/session/local/all`. Against BookOrbit it finishes the per-author phase and loops.
+The failure is in decoding one of those five phase responses.
+
+**Root-cause candidate found by field-level diff (capture 0010 real-ABS vs 0800s BookOrbit):**
+our minified items were a SUPERSET of ABS `toOldJSONMinified` — we sent `metadata.authors/[{id,name}]`,
+`metadata.narrators`, `metadata.series`, `media.libraryItemId`, `numMissingParts`,
+`numInvalidAudioFiles`, and `userMediaProgress` on list rows. Real ABS 2.35.1 emits NONE of those in
+minified/list contexts (verified in `models/Book.js` `toOldJSONMinified`/`oldMetadataToJSONMinified`
+and `models/LibraryItem.js`). **Extra keys are as dangerous as missing ones**: a client property
+declared optional decodes fine when the key is ABSENT (decodeIfPresent skips), but THROWS when the
+key is PRESENT with a narrower object than the client's model — e.g. our `{id,name}` author stubs
+vs a full Author model. That would fail only against BookOrbit, silently, with healthy 200s.
+
+Fixes (working tree, tests updated, 283 ABS tests pass, typecheck clean):
+
+- `abs-item.mapper.ts` — minified media/metadata now EXACTLY match ABS `toOldJSONMinified` key sets
+  (arrays, libraryItemId, part counts removed); `authorNameLF` now real "Last, First" (was plain
+  name); expanded metadata gains `descriptionPlain` (matches `oldMetadataToJSONExpanded`).
+- `abs-catalog.service.ts` — `userMediaProgress` no longer attached to any list-shaped response
+  (browse/series books/search/shelves/batch), only item detail; items/series/collections/authors
+  envelopes now echo `sortBy`/`filterBy`/`include` verbatim and OMIT them when the client didn't
+  send them (ABS `payload.sortBy = req.query.sort` semantics); series envelope loses `offset`,
+  gains `include`; series elements lose `libraryItemIds`/`totalDuration` (not in ABS output).
+- `abs-libraries.controller.ts` — passes `rawSort` through for envelope echo.
+
+**Next: redeploy `bookorbit-test`, Prologue re-sync (fresh connection or clear app), check books.**
+If STILL empty after this, the phase responses are byte-shape-identical to ABS modulo values; next
+lever is value-level scrutiny (e.g. authors `addedAt: 0`, empty `folderId`/`path`/`relPath`) and/or
+replaying Prologue's exact request list against both servers with a scripted differ.
+
 ## Don't re-do
 
 - Don't trust api.audiobookshelf.org for exact shapes — use the local ABS clone.
@@ -409,3 +451,5 @@ side-by-side capture: same app session, both servers — diff `items_filtered` b
 - Don't commit any captured bearer tokens or the `abs-capture/` dir (gitignored).
 - Don't re-verify response shapes against the CURRENT public ShelfPlayerKit models — done
   programmatically 2026-07-07, zero violations (see Session 2026-07-07).
+- Don't re-test the UUID-id hypothesis — refuted 2026-07-08 via the id-rewrite proxy (see above).
+- Don't re-add "harmless" superset keys to minified shapes — that was the 2026-07-08 lead suspect.

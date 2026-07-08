@@ -64,15 +64,46 @@ describe('toAbsLibraryItem', () => {
     expect(metadata.isbn).toBe('9780000000001');
   });
 
-  it('omits audioFiles in minified mode but keeps counts/duration', () => {
+  it('minified media/metadata carry exactly the ABS toOldJSONMinified key sets', () => {
     const item = toAbsLibraryItem(makeItem(), relations, { minified: true });
     const media = item.media as Record<string, unknown>;
-    expect(media.audioFiles).toBeUndefined();
+    // Book.toOldJSONMinified: no audioFiles, no libraryItemId, no part counts (extra keys break
+    // strict Codable clients whose optional properties decode stricter shapes than we send).
+    expect(Object.keys(media).sort()).toEqual([
+      'coverPath',
+      'duration',
+      'id',
+      'metadata',
+      'numAudioFiles',
+      'numChapters',
+      'numTracks',
+      'size',
+      'tags',
+    ]);
     expect(media.numTracks).toBe(2);
     expect(media.duration).toBe(300);
-    // ABS-always-present counts strict clients (Prologue) require to decode the minified media object.
-    expect(media.numMissingParts).toBe(0);
-    expect(media.numInvalidAudioFiles).toBe(0);
+    // oldMetadataToJSONMinified: flattened name strings only — never authors/narrators/series arrays.
+    const metadata = media.metadata as Record<string, unknown>;
+    expect(metadata.authors).toBeUndefined();
+    expect(metadata.narrators).toBeUndefined();
+    expect(metadata.series).toBeUndefined();
+    expect(metadata.authorName).toBeDefined();
+    expect(metadata.narratorName).toBeDefined();
+    expect(metadata.seriesName).toBeDefined();
+  });
+
+  it('formats authorNameLF as "Last, First" joined across authors', () => {
+    const rel = {
+      ...relations,
+      authors: [
+        { id: 1, name: 'Adrian Tchaikovsky' },
+        { id: 2, name: 'Dennis E. Taylor' },
+      ],
+    };
+    const item = toAbsLibraryItem(makeItem(), rel, { minified: true });
+    const metadata = (item.media as Record<string, unknown>).metadata as Record<string, unknown>;
+    expect(metadata.authorName).toBe('Adrian Tchaikovsky, Dennis E. Taylor');
+    expect(metadata.authorNameLF).toBe('Tchaikovsky, Adrian, Taylor, Dennis E.');
   });
 
   it('attaches userMediaProgress only when supplied', () => {

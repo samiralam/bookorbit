@@ -110,6 +110,7 @@ export class AbsLibrariesController {
       limit: Math.max(0, toInt(query.limit, 0)),
       page: Math.max(0, toInt(query.page, 0)),
       sort: parseAbsSort(query.sort),
+      rawSort: query.sort,
       desc: query.desc === '1',
       minified: query.minified === '1',
       filter: query.filter,

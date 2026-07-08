@@ -17,6 +17,11 @@ export interface AbsItemQuery {
   limit: number;
   page: number;
   sort: AbsItemSortField;
+  /**
+   * The raw `sort` query param. ABS echoes it verbatim as `sortBy` and OMITS the key when the
+   * client sent no sort — envelopes must mirror that (undefined is dropped by JSON.stringify).
+   */
+  rawSort?: string;
   desc: boolean;
   minified: boolean;
   /** Raw `filter=group.base64url(value)` browse filter (REIMPLEMENTATION_GUIDE §4.2). */
@@ -146,23 +151,22 @@ export class AbsCatalogService {
       extraWhere: this.buildFilterWhere(query.filter),
     });
     const relations = await this.relationsFor(rows);
-    const progressByBook = await this.progressMap(user.id, rows);
 
     // ABS's getLibraryItems always serializes list rows via toOldJSONMinified() regardless of the
-    // `minified` query param; Prologue decodes this list with its minified Book model (requires
-    // numAudioFiles/numChapters), so the expanded shape fails strict Codable and empties the library.
-    const results = rows.map((row) =>
-      toAbsLibraryItem(row, relations.get(row.id)!, { minified: true, mediaProgress: progressByBook.get(row.id) ?? null }),
-    );
+    // `minified` query param, and never attaches userMediaProgress to list rows — clients read
+    // progress from /api/me. Extra keys are as dangerous to strict Codable clients as missing ones.
+    const results = rows.map((row) => toAbsLibraryItem(row, relations.get(row.id)!, { minified: true }));
 
+    // Envelope mirrors ABS LibraryController.getLibraryItems exactly: sortBy/filterBy echo the raw
+    // query params and are OMITTED (not null) when the client didn't send them.
     return {
       results,
       total,
       limit: query.limit,
       page: query.page,
-      sortBy: 'addedAt',
+      sortBy: query.rawSort,
       sortDesc: query.desc,
-      filterBy: query.filter ?? null,
+      filterBy: query.filter,
       mediaType: 'book',
       minified: query.minified,
       collapseseries: false,
@@ -184,22 +188,24 @@ export class AbsCatalogService {
     return toAbsLibraryItem(item, relations.get(item.id)!, { minified, mediaProgress: progress });
   }
 
-  /** `POST /api/items/batch/get` — fetch many items by id, access-filtered. */
+  /** `POST /api/items/batch/get` — fetch many items by id, access-filtered (no progress, as ABS). */
   async getLibraryItemsBatch(user: RequestUser, bookIds: number[]): Promise<Record<string, unknown>[]> {
     const items = await this.readRepo.findItemsByIds(bookIds);
     const accessible = user.isSuperuser ? null : new Set(await this.libraryService.findAccessibleLibraryIds(user));
     const visible = items.filter((i) => i.status !== 'processing' && (!accessible || accessible.has(i.libraryId)));
     const relations = await this.relationsFor(visible);
-    const progressByBook = await this.progressMap(user.id, visible);
-    return visible.map((row) => toAbsLibraryItem(row, relations.get(row.id)!, { mediaProgress: progressByBook.get(row.id) ?? null }));
+    return visible.map((row) => toAbsLibraryItem(row, relations.get(row.id)!, {}));
   }
 
-  /** Assemble ABS LibraryItems for a set of already-fetched rows (relations + the user's progress). */
-  private async assembleItems(userId: number, rows: AbsItemRow[], minified: boolean): Promise<Record<string, unknown>[]> {
+  /**
+   * Assemble ABS LibraryItems for a set of already-fetched rows. Like ABS, list-shaped responses
+   * (browse, series books, search, shelves) never attach userMediaProgress — only the single-item
+   * detail endpoint does.
+   */
+  private async assembleItems(rows: AbsItemRow[], minified: boolean): Promise<Record<string, unknown>[]> {
     if (rows.length === 0) return [];
     const relations = await this.relationsFor(rows);
-    const progressByBook = await this.progressMap(userId, rows);
-    return rows.map((row) => toAbsLibraryItem(row, relations.get(row.id)!, { minified, mediaProgress: progressByBook.get(row.id) ?? null }));
+    return rows.map((row) => toAbsLibraryItem(row, relations.get(row.id)!, { minified }));
   }
 
   /** `GET /api/libraries/:id/search` — title/author search; client reads the `book` array. */
@@ -209,7 +215,7 @@ export class AbsCatalogService {
     if (!term) return { book: [], tags: [], authors: [], series: [] };
 
     const rows = await this.readRepo.searchItems(libraryId, term, limit);
-    const items = await this.assembleItems(user.id, rows, true);
+    const items = await this.assembleItems(rows, true);
     return {
       book: items.map((libraryItem, i) => ({ libraryItem, matchKey: 'title', matchText: rows[i].title ?? '' })),
       tags: [],
@@ -230,26 +236,37 @@ export class AbsCatalogService {
     const rows = await this.readRepo.findItemsByIds(bookIds);
     // ABS serializes series books via toOldJSONMinified() (seriesFilters.getFilteredSeries),
     // regardless of the request's `minified` flag — match it so Prologue's minified decode succeeds.
-    const itemsByBook = new Map((await this.assembleItems(user.id, rows, true)).map((it, i) => [rows[i].id, it]));
+    const itemsByBook = new Map((await this.assembleItems(rows, true)).map((it, i) => [rows[i].id, it]));
 
-    // Shape mirrors ABS Series.toOldJSON (id, name, nameIgnorePrefix, description, addedAt,
-    // updatedAt, libraryId) so strict clients decode each series; BookOrbit has no series
-    // description/timestamps, so those are null/0 (the keys must be present, values may be empty).
+    // Element shape is EXACTLY ABS Series.toOldJSON + books (seriesFilters.getFilteredSeries):
+    // no libraryItemIds, and totalDuration only exists when sorting by it — extra keys break strict
+    // Codable clients whose optional properties decode stricter shapes than we'd send. BookOrbit has
+    // no series description/timestamps, so those are null/0 (keys present, values empty).
     const libraryAbsId = encodeAbsId('library', libraryId);
     const results = pageSeries.map((s) => ({
       id: encodeAbsId('series', s.id),
       name: s.name,
       nameIgnorePrefix: s.name,
       description: null,
-      libraryId: libraryAbsId,
-      libraryItemIds: s.books.map((b) => encodeAbsId('libraryItem', b.bookId)),
-      books: s.books.map((b) => itemsByBook.get(b.bookId)).filter((it): it is Record<string, unknown> => it != null),
       addedAt: 0,
       updatedAt: 0,
-      totalDuration: 0,
+      libraryId: libraryAbsId,
+      books: s.books.map((b) => itemsByBook.get(b.bookId)).filter((it): it is Record<string, unknown> => it != null),
     }));
 
-    return { results, total, limit: query.limit, page: query.page, sortBy: 'name', sortDesc: query.desc, minified: query.minified, offset };
+    // Envelope mirrors ABS getAllSeriesForLibrary: no offset key; sortBy/filterBy echo the raw
+    // query params (omitted when absent); include is always present.
+    return {
+      results,
+      total,
+      limit: query.limit,
+      page: query.page,
+      sortBy: query.rawSort,
+      sortDesc: query.desc,
+      filterBy: query.filter,
+      minified: query.minified,
+      include: '',
+    };
   }
 
   /** `GET /api/libraries/:id/collections` — paginated user collections with their books. */
@@ -264,7 +281,7 @@ export class AbsCatalogService {
     const rows = await this.readRepo.findItemsByIds(bookIds);
     // ABS serializes collection books via toOldJSONExpanded() (Collection.toOldJSONExpanded),
     // regardless of the request's `minified` flag — match it for a consistent strict-decode shape.
-    const itemsByBook = new Map((await this.assembleItems(user.id, rows, false)).map((it, i) => [rows[i].id, it]));
+    const itemsByBook = new Map((await this.assembleItems(rows, false)).map((it, i) => [rows[i].id, it]));
 
     const results = page.map((c) => ({
       id: encodeAbsId('collection', c.id),
@@ -276,7 +293,18 @@ export class AbsCatalogService {
       createdAt: 0,
     }));
 
-    return { results, total, limit: query.limit, page: query.page, sortBy: 'name', sortDesc: query.desc, minified: query.minified, offset };
+    // Envelope mirrors ABS's library collections endpoint: no offset key, sortBy echoes the raw
+    // query param (omitted when the client sent no sort), include always present.
+    return {
+      results,
+      total,
+      limit: query.limit,
+      page: query.page,
+      sortBy: query.rawSort,
+      sortDesc: query.desc,
+      minified: query.minified,
+      include: '',
+    };
   }
 
   /** `GET /api/libraries/:id/filterdata` — valid filter values/ids for the library. */
@@ -320,7 +348,8 @@ export class AbsCatalogService {
       sortDesc: query.desc === '1',
       filterBy: query.filter,
       minified: query.minified === '1',
-      include: query.include ?? '',
+      // ABS echoes req.query.include verbatim — the key is OMITTED when the client sent none.
+      include: query.include,
     };
   }
 
@@ -349,7 +378,7 @@ export class AbsCatalogService {
 
     const inProgress = await this.itemsInProgressForLibrary(user, libraryId);
     const { rows: recentRows } = await this.readRepo.listItems({ libraryId, limit: 10, offset: 0, sort: 'addedAt', desc: true });
-    const recent = await this.assembleItems(user.id, recentRows, true);
+    const recent = await this.assembleItems(recentRows, true);
 
     const shelves: Record<string, unknown>[] = [];
     if (inProgress.length > 0) {
@@ -375,7 +404,7 @@ export class AbsCatalogService {
     const bookIds = await this.progressService.listInProgressBookIds(user.id);
     const rows = (await this.readRepo.findItemsByIds(bookIds)).filter((r) => r.libraryId === libraryId);
     const ordered = orderByIds(rows, bookIds);
-    return this.assembleItems(user.id, ordered, true);
+    return this.assembleItems(ordered, true);
   }
 
   private async itemsForBookIds(user: RequestUser, bookIds: number[], minified: boolean): Promise<Record<string, unknown>[]> {
@@ -385,7 +414,7 @@ export class AbsCatalogService {
       items.filter((i) => i.status !== 'processing' && (!accessible || accessible.has(i.libraryId))),
       bookIds,
     );
-    return this.assembleItems(user.id, visible, minified);
+    return this.assembleItems(visible, minified);
   }
 
   private async progressMap(userId: number, rows: AbsItemRow[]): Promise<Map<number, Record<string, unknown>>> {

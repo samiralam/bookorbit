@@ -68,8 +68,10 @@ describe('AbsLibrariesController#items', () => {
       limit: 25,
       page: 2,
       sort: 'title',
+      rawSort: 'media.metadata.title',
       desc: true,
       minified: true,
+      filter: undefined,
     });
   });
 
