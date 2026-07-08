@@ -63,34 +63,45 @@ function buildMetadata(item: AbsItemRow, rel: AbsItemRelations, minified: boolea
   };
 }
 
+/**
+ * Book-level context for file-shaped objects. Real ABS files always carry probe/tag data and real
+ * timestamps; clients surface these directly (e.g. a download-queue row titled by `tagTitle`), so
+ * emitting empty tags or zero times degrades UI even though it decodes.
+ */
+interface AbsFileContext {
+  title: string;
+  authorName: string;
+  addedAtMs: number;
+  updatedAtMs: number;
+}
+
 /** ABS FileMetadata block, shared by audioFiles, tracks, and libraryFiles. */
-function toAbsFileMetadata(file: AbsAudioFileRow): Record<string, unknown> {
+function toAbsFileMetadata(file: AbsAudioFileRow, ctx: AbsFileContext): Record<string, unknown> {
   return {
     filename: basename(file.absolutePath),
     ext: file.format ? `.${file.format.toLowerCase()}` : '',
     path: file.absolutePath,
     relPath: basename(file.absolutePath),
     size: file.sizeBytes ?? 0,
-    mtimeMs: 0,
-    ctimeMs: 0,
-    birthtimeMs: 0,
+    mtimeMs: ctx.updatedAtMs,
+    ctimeMs: ctx.updatedAtMs,
+    birthtimeMs: ctx.addedAtMs,
   };
 }
 
-function toAbsAudioFile(file: AbsAudioFileRow, index: number): Record<string, unknown> {
+function toAbsAudioFile(file: AbsAudioFileRow, index: number, ctx: AbsFileContext): Record<string, unknown> {
   return {
     // ABS AudioFile.index is 1-based (first file is index 1).
     index: index + 1,
     ino: String(file.id),
-    metadata: toAbsFileMetadata(file),
-    addedAt: 0,
-    updatedAt: 0,
+    metadata: toAbsFileMetadata(file, ctx),
+    addedAt: ctx.addedAtMs,
+    updatedAt: ctx.updatedAtMs,
     trackNumFromMeta: index + 1,
     discNumFromMeta: null,
     trackNumFromFilename: null,
     discNumFromFilename: null,
     manuallyVerified: false,
-    invalid: false,
     exclude: false,
     error: null,
     format: file.format ?? '',
@@ -103,7 +114,11 @@ function toAbsAudioFile(file: AbsAudioFileRow, index: number): Record<string, un
     channelLayout: 'stereo',
     chapters: [],
     embeddedCoverArt: null,
-    metaTags: {},
+    metaTags: {
+      tagAlbum: ctx.title,
+      tagArtist: ctx.authorName,
+      tagTitle: ctx.title,
+    },
     mimeType: audioMimeType(file.format),
   };
 }
@@ -176,6 +191,12 @@ export function toAbsLibraryItem(item: AbsItemRow, rel: AbsItemRelations, opts: 
   const metadata = buildMetadata(item, rel, opts.minified ?? false);
   const coverPath = `/metadata/items/${item.id}/cover`;
   const chapters = buildItemChapters(item.chapters, duration);
+  const fileCtx: AbsFileContext = {
+    title: item.title ?? '',
+    authorName: rel.authors.map((a) => a.name).join(', '),
+    addedAtMs: toEpochMs(item.addedAt),
+    updatedAtMs: toEpochMs(item.updatedAt),
+  };
 
   // Minified media is EXACTLY ABS `Book.toOldJSONMinified`: no libraryItemId, no part counts
   // (`ebookFormat` is omitted for audiobooks, matching ABS's undefined-key behavior). Expanded
@@ -200,12 +221,12 @@ export function toAbsLibraryItem(item: AbsItemRow, rel: AbsItemRelations, opts: 
         metadata,
         coverPath,
         tags: [],
-        audioFiles: rel.audioFiles.map((f, i) => toAbsAudioFile(f, i)),
+        audioFiles: rel.audioFiles.map((f, i) => toAbsAudioFile(f, i, fileCtx)),
         chapters,
         ebookFile: null,
         duration,
         size,
-        tracks: buildItemTracks(libraryItemId, rel.audioFiles),
+        tracks: buildItemTracks(libraryItemId, rel.audioFiles, fileCtx),
       };
 
   const result: Record<string, unknown> = {
@@ -241,10 +262,10 @@ export function toAbsLibraryItem(item: AbsItemRow, rel: AbsItemRelations, opts: 
     result.scanVersion = ABS_SERVER_VERSION;
     result.libraryFiles = rel.audioFiles.map((f) => ({
       ino: String(f.id),
-      metadata: toAbsFileMetadata(f),
+      metadata: toAbsFileMetadata(f, fileCtx),
       isSupplementary: null,
-      addedAt: 0,
-      updatedAt: 0,
+      addedAt: fileCtx.addedAtMs,
+      updatedAt: fileCtx.updatedAtMs,
       fileType: 'audio',
     }));
     result.size = size;
@@ -258,11 +279,11 @@ export function toAbsLibraryItem(item: AbsItemRow, rel: AbsItemRelations, opts: 
  * ABS `Book.getTracklist`: each track is the AudioFile JSON plus title/startOffset/contentUrl,
  * with contentUrl pointing at the inline file-stream route (`GET /api/items/:id/file/:ino`).
  */
-function buildItemTracks(libraryItemAbsId: string, audioFiles: AbsAudioFileRow[]): Record<string, unknown>[] {
+function buildItemTracks(libraryItemAbsId: string, audioFiles: AbsAudioFileRow[], ctx: AbsFileContext): Record<string, unknown>[] {
   let startOffset = 0;
   return audioFiles.map((file, index) => {
     const track = {
-      ...toAbsAudioFile(file, index),
+      ...toAbsAudioFile(file, index, ctx),
       title: basename(file.absolutePath),
       startOffset,
       contentUrl: `/api/items/${libraryItemAbsId}/file/${file.id}`,

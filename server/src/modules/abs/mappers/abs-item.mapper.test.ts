@@ -72,6 +72,13 @@ describe('toAbsLibraryItem', () => {
     expect(libraryFiles[0]).toMatchObject({ ino: '10', fileType: 'audio', isSupplementary: null });
     expect((libraryFiles[0].metadata as Record<string, unknown>).filename).toBe('10.mp3');
 
+    // Real ABS files always carry probe tags; clients surface tagTitle/tagArtist directly (e.g.
+    // Prologue's download queue), so audio files get the book's title/author, never empty tags.
+    const audioFile = (media.audioFiles as Record<string, unknown>[])[0];
+    expect(audioFile.metaTags).toEqual({ tagAlbum: 'The Hobbit', tagArtist: 'Tolkien', tagTitle: 'The Hobbit' });
+    expect(audioFile.invalid).toBeUndefined();
+    expect(audioFile.addedAt).toBe(new Date('2024-01-01T00:00:00Z').getTime());
+
     const metadata = media.metadata as Record<string, unknown>;
     expect(metadata.title).toBe('The Hobbit');
     expect(metadata.authorName).toBe('Tolkien');

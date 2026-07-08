@@ -86,6 +86,18 @@ const server = http.createServer((req, res) => {
       servername: UPSTREAM.hostname,
     },
     (upRes) => {
+      const ctype = upRes.headers['content-type'] ?? '';
+      // Media/binary bodies (covers, audiobook range streams) pass through unbuffered — buffering a
+      // 300MB+ range response delays the first byte by seconds and stalls AVPlayer playback.
+      if (!/json|xml|text|mpegurl/i.test(ctype)) {
+        console.log(
+          `[${ts()}] #${id} ${req.method} ${req.url}\n` +
+            `        ← ${upRes.statusCode} ${ctype} (streamed) range=${req.headers['range'] ?? '-'} len=${upRes.headers['content-length'] ?? '?'}`,
+        );
+        res.writeHead(upRes.statusCode, upRes.headers);
+        upRes.pipe(res);
+        return;
+      }
       const chunks = [];
       upRes.on('data', (c) => chunks.push(c));
       upRes.on('end', () => {
@@ -114,7 +126,11 @@ const server = http.createServer((req, res) => {
   );
   upReq.on('error', (e) => {
     console.log(`[${ts()}] #${id} ${req.method} ${req.url}  ✖ upstream error: ${e.message}`);
-    res.writeHead(502).end(`proxy upstream error: ${e.message}`);
+    if (!res.headersSent) res.writeHead(502).end(`proxy upstream error: ${e.message}`);
+  });
+  // AVPlayer opens/cancels range requests aggressively; stop pulling from upstream when it hangs up.
+  res.on('close', () => {
+    if (!res.writableEnded) upReq.destroy();
   });
   req.pipe(upReq);
 });

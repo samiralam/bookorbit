@@ -480,6 +480,29 @@ Fixes (working tree; 284 ABS tests pass, typecheck+lint clean):
 **Next: redeploy, open a book, hit play, scrub, background the app** — first live exercise of the
 file-stream route and `POST /api/session/local-all` write path.
 
+## Session 2026-07-08 (later still) — PLAYBACK WORKS (capture proxy was buffering); download-queue "?" fix
+
+**Playback initially silent through the proxy — the CAPTURE PROXY was the cause, not the server.**
+Symptom: play didn't advance, no audio; log showed healthy 206s but Prologue re-pulled ~370MB
+ranges of the same file every ~5s. The capture proxy buffered every response fully in memory
+before forwarding, so each range request delivered zero bytes to the phone for 5–6s → AVPlayer
+stalled/cancelled/retried. (The 380KB test-tone books masked this against real ABS.) Fixed the
+proxy (`abs-capture-proxy.mjs`): non-JSON/text bodies now stream through unbuffered (pipe), client
+aborts propagate upstream, and media log lines include the `Range:` header. **After the proxy fix,
+playback works with a textbook AVPlayer pattern** (bytes=0-1 probe → header read → 64KB chunk
+reads), `?token=` auth on the file route works, and `POST /api/session/local-all` returns the ABS
+`{results:[{id,success,progressSynced}]}` shape. When debugging media through the proxy, remember:
+logged byte counts are what UPSTREAM sent, not what the phone consumed.
+
+**Download works; queue shows "?" instead of title/cover (open).** The per-file download
+(`GET /api/items/:id/file/:ino/download`) returns 200 with a proper Content-Disposition filename;
+no request around it fails — so the "?" is rendered from decoded data. Best remaining value-level
+deviation: our audio files carried `metaTags: {}` and zeroed timestamps, while real ABS files always
+have `tagTitle`/`tagArtist`/`tagAlbum` (a queue row titled by tag renders "?" when nil). Fix applied
+(hypothesis, awaiting retest): `abs-item.mapper.ts` audio files/tracks/libraryFiles now carry
+`metaTags` (tagTitle/tagAlbum = book title, tagArtist = authors) and the item's real
+added/updated timestamps; also removed the not-in-ABS `invalid` key from audio files.
+
 ## Don't re-do
 
 - Don't trust api.audiobookshelf.org for exact shapes — use the local ABS clone.
