@@ -63,7 +63,8 @@ export class AbsItemsController {
   async getItem(@CurrentUser() user: RequestUser, @Param('id') id: string, @Query() query: Record<string, string>): Promise<Record<string, unknown>> {
     const bookId = decodeAbsId('libraryItem', id);
     if (bookId === null) throw AbsHttpException.notFound();
-    return this.catalogService.getLibraryItem(user, bookId, query.minified === '1');
+    const includeProgress = (query.include ?? '').split(',').includes('progress');
+    return this.catalogService.getLibraryItem(user, bookId, query.minified === '1', includeProgress);
   }
 
   /** Start a playback session (direct-play, book). Podcast `/play/:episodeId` is out of scope. */

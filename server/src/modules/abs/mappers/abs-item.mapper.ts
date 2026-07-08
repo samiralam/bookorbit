@@ -1,4 +1,4 @@
-import { ABS_MEDIA_TYPE_BOOK } from '../abs.constants';
+import { ABS_MEDIA_TYPE_BOOK, ABS_SERVER_VERSION } from '../abs.constants';
 import { encodeAbsId } from '../abs-id.util';
 import { audioMimeType, normalizeChapters, type AbsChapter } from '../abs-media.util';
 import type { AbsAudioFileRow, AbsItemRow } from '../abs-read.repository';
@@ -63,21 +63,26 @@ function buildMetadata(item: AbsItemRow, rel: AbsItemRelations, minified: boolea
   };
 }
 
-function toAbsAudioFile(file: AbsAudioFileRow, index: number): Record<string, unknown> {
-  const ext = file.format ? `.${file.format.toLowerCase()}` : '';
+/** ABS FileMetadata block, shared by audioFiles, tracks, and libraryFiles. */
+function toAbsFileMetadata(file: AbsAudioFileRow): Record<string, unknown> {
   return {
-    index,
+    filename: basename(file.absolutePath),
+    ext: file.format ? `.${file.format.toLowerCase()}` : '',
+    path: file.absolutePath,
+    relPath: basename(file.absolutePath),
+    size: file.sizeBytes ?? 0,
+    mtimeMs: 0,
+    ctimeMs: 0,
+    birthtimeMs: 0,
+  };
+}
+
+function toAbsAudioFile(file: AbsAudioFileRow, index: number): Record<string, unknown> {
+  return {
+    // ABS AudioFile.index is 1-based (first file is index 1).
+    index: index + 1,
     ino: String(file.id),
-    metadata: {
-      filename: basename(file.absolutePath),
-      ext,
-      path: file.absolutePath,
-      relPath: basename(file.absolutePath),
-      size: file.sizeBytes ?? 0,
-      mtimeMs: 0,
-      ctimeMs: 0,
-      birthtimeMs: 0,
-    },
+    metadata: toAbsFileMetadata(file),
     addedAt: 0,
     updatedAt: 0,
     trackNumFromMeta: index + 1,
@@ -153,7 +158,11 @@ export function buildTranscodeTrack(streamId: string, duration: number): Record<
 
 export interface ToAbsLibraryItemOptions {
   minified?: boolean;
-  /** ABS MediaProgress for the current user, attached as userMediaProgress when present. */
+  /**
+   * ABS MediaProgress for the current user. Pass a value (or explicit null) to emit the
+   * userMediaProgress key — ABS emits `userMediaProgress: null` on `?include=progress` when the
+   * user has none, and omits the key entirely without the include. Leave undefined to omit.
+   */
   mediaProgress?: Record<string, unknown> | null;
 }
 
@@ -169,7 +178,10 @@ export function toAbsLibraryItem(item: AbsItemRow, rel: AbsItemRelations, opts: 
   const chapters = buildItemChapters(item.chapters, duration);
 
   // Minified media is EXACTLY ABS `Book.toOldJSONMinified`: no libraryItemId, no part counts
-  // (`ebookFormat` is omitted for audiobooks, matching ABS's undefined-key behavior).
+  // (`ebookFormat` is omitted for audiobooks, matching ABS's undefined-key behavior). Expanded
+  // media is EXACTLY `Book.toOldJSONExpanded`: audioFiles + chapters + ebookFile + tracks, and no
+  // numTracks/numAudioFiles counts. Prologue reads the book's playable contents from `tracks` —
+  // without it the detail screen shows "Unable to load book contents" and play is disabled.
   const media: Record<string, unknown> = opts.minified
     ? {
         id: bookAbsId,
@@ -190,10 +202,10 @@ export function toAbsLibraryItem(item: AbsItemRow, rel: AbsItemRelations, opts: 
         tags: [],
         audioFiles: rel.audioFiles.map((f, i) => toAbsAudioFile(f, i)),
         chapters,
+        ebookFile: null,
         duration,
         size,
-        numTracks,
-        ebookFile: null,
+        tracks: buildItemTracks(libraryItemId, rel.audioFiles),
       };
 
   const result: Record<string, unknown> = {
@@ -217,12 +229,47 @@ export function toAbsLibraryItem(item: AbsItemRow, rel: AbsItemRelations, opts: 
     isInvalid: false,
     mediaType: ABS_MEDIA_TYPE_BOOK,
     media,
-    numFiles: numTracks,
-    size,
   };
 
-  if (opts.mediaProgress) result.userMediaProgress = opts.mediaProgress;
+  if (opts.minified) {
+    // LibraryItem.toOldJSONMinified: numFiles + size, no scan info or file list.
+    result.numFiles = numTracks;
+    result.size = size;
+  } else {
+    // LibraryItem.toOldJSONExpanded: lastScan/scanVersion + full libraryFiles list.
+    result.lastScan = toEpochMs(item.updatedAt);
+    result.scanVersion = ABS_SERVER_VERSION;
+    result.libraryFiles = rel.audioFiles.map((f) => ({
+      ino: String(f.id),
+      metadata: toAbsFileMetadata(f),
+      isSupplementary: null,
+      addedAt: 0,
+      updatedAt: 0,
+      fileType: 'audio',
+    }));
+    result.size = size;
+  }
+
+  if (opts.mediaProgress !== undefined) result.userMediaProgress = opts.mediaProgress;
   return result;
+}
+
+/**
+ * ABS `Book.getTracklist`: each track is the AudioFile JSON plus title/startOffset/contentUrl,
+ * with contentUrl pointing at the inline file-stream route (`GET /api/items/:id/file/:ino`).
+ */
+function buildItemTracks(libraryItemAbsId: string, audioFiles: AbsAudioFileRow[]): Record<string, unknown>[] {
+  let startOffset = 0;
+  return audioFiles.map((file, index) => {
+    const track = {
+      ...toAbsAudioFile(file, index),
+      title: basename(file.absolutePath),
+      startOffset,
+      contentUrl: `/api/items/${libraryItemAbsId}/file/${file.id}`,
+    };
+    startOffset += file.durationSeconds ?? 0;
+    return track;
+  });
 }
 
 function buildItemChapters(raw: unknown, duration: number): AbsChapter[] {

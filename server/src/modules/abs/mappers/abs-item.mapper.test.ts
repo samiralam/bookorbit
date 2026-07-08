@@ -51,10 +51,26 @@ describe('toAbsLibraryItem', () => {
     expect(media.id).toBe('bk_3');
     expect(media.duration).toBe(300); // 100 + 200
     expect(media.size).toBe(3000);
-    expect(media.numTracks).toBe(2);
     expect(Array.isArray(media.audioFiles)).toBe(true);
     expect((media.audioFiles as unknown[]).length).toBe(2);
     expect(media.chapters).toEqual([{ id: 0, start: 0, end: 60, title: 'One' }]);
+
+    // Book.toOldJSONExpanded carries tracks (Prologue's "book contents") — audio-file JSON plus
+    // title/startOffset/contentUrl — and no numTracks count.
+    expect(media.numTracks).toBeUndefined();
+    const tracks = media.tracks as Record<string, unknown>[];
+    expect(tracks).toHaveLength(2);
+    expect(tracks[0]).toMatchObject({ index: 1, startOffset: 0, duration: 100, contentUrl: '/api/items/li_3/file/10', title: '10.mp3' });
+    expect(tracks[1]).toMatchObject({ index: 2, startOffset: 100, duration: 200, contentUrl: '/api/items/li_3/file/11' });
+
+    // LibraryItem.toOldJSONExpanded: scan info + full libraryFiles, no numFiles count.
+    expect(item.numFiles).toBeUndefined();
+    expect(item.lastScan).toBeDefined();
+    expect(item.scanVersion).toBeDefined();
+    const libraryFiles = item.libraryFiles as Record<string, unknown>[];
+    expect(libraryFiles).toHaveLength(2);
+    expect(libraryFiles[0]).toMatchObject({ ino: '10', fileType: 'audio', isSupplementary: null });
+    expect((libraryFiles[0].metadata as Record<string, unknown>).filename).toBe('10.mp3');
 
     const metadata = media.metadata as Record<string, unknown>;
     expect(metadata.title).toBe('The Hobbit');
@@ -106,11 +122,15 @@ describe('toAbsLibraryItem', () => {
     expect(metadata.authorNameLF).toBe('Tchaikovsky, Adrian, Taylor, Dennis E.');
   });
 
-  it('attaches userMediaProgress only when supplied', () => {
+  it('attaches userMediaProgress when supplied, including explicit null (ABS include=progress)', () => {
     const withProgress = toAbsLibraryItem(makeItem(), relations, { mediaProgress: { progress: 0.5 } });
     expect(withProgress.userMediaProgress).toEqual({ progress: 0.5 });
+    // ?include=progress with no progress row: ABS emits the key with an explicit null.
+    const withNull = toAbsLibraryItem(makeItem(), relations, { mediaProgress: null });
+    expect('userMediaProgress' in withNull).toBe(true);
+    expect(withNull.userMediaProgress).toBeNull();
     const without = toAbsLibraryItem(makeItem(), relations);
-    expect(without.userMediaProgress).toBeUndefined();
+    expect('userMediaProgress' in without).toBe(false);
   });
 
   it('flags missing items via isMissing', () => {

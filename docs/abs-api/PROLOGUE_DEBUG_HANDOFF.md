@@ -444,6 +444,42 @@ If STILL empty after this, the phase responses are byte-shape-identical to ABS m
 lever is value-level scrutiny (e.g. authors `addedAt: 0`, empty `folderId`/`path`/`relPath`) and/or
 replaying Prologue's exact request list against both servers with a scripted differ.
 
+## Session 2026-07-08 (later) — BOOKS RENDER; "Unable to load book contents" fixed (expanded item lacked tracks)
+
+**The superset fix WORKED — Prologue shows books and fetches covers.** Sync stats from the capture
+log: a pull-to-refresh is ~750–1500 requests (one `/items?filter=authors.<id>` per author + one
+`/items?filter=series.<id>` per series + paged series/collections); BookOrbit answers at p50=8ms,
+p99=19ms — the ~8s refresh is Prologue's sync pattern, not server latency. The `@SkipThrottle()`
+fix is essential at this volume.
+
+**Next failure: opening a book showed "Unable to load book contents", play disabled.** Capture log
+showed the decode-retry tell-tale on `GET /api/items/:id?expanded=1&include=authors,progress`
+(re-fetched every ~4s, no play request ever). Diff vs the real-ABS expanded item (ref capture 0030):
+our expanded item was missing **`media.tracks`** (the book's playable contents — the literal cause),
+**`libraryFiles`**, and `lastScan`/`scanVersion`; it also carried not-in-ABS extras (`media.numTracks`,
+top-level `numFiles`) and omitted `userMediaProgress` when null (ABS emits the key as explicit null
+on `?include=progress`).
+
+**Key discovery about Prologue's playback model:** the real-ABS capture contains NO
+`POST /api/items/:id/play` at all. Prologue plays by streaming `tracks[].contentUrl`
+(`/api/items/:id/file/:ino`, Range requests) directly from the expanded item, then reports progress
+via `POST /api/session/local-all` (hyphen route, per ABS `ApiRouter.js:234`; the capture filename's
+trailing `_` is an empty `?`, NOT a trailing slash — our route was already correct). So `tracks`
+is the playback-critical field, and our existing `GET :id/file/:fileid` route serves it.
+
+Fixes (working tree; 284 ABS tests pass, typecheck+lint clean):
+
+- `abs-item.mapper.ts` — expanded media now EXACTLY `Book.toOldJSONExpanded`: adds `tracks`
+  (audio-file JSON + title/startOffset/contentUrl per `getTracklist`), `ebookFile` placement, drops
+  `numTracks`; expanded top level now EXACTLY `LibraryItem.toOldJSONExpanded`: adds `lastScan`,
+  `scanVersion` (ABS_SERVER_VERSION), `libraryFiles` (built from audio files), drops `numFiles`
+  (minified keeps it); AudioFile `index` is now 1-based like ABS; shared `toAbsFileMetadata` helper.
+- `abs-catalog.service.ts` + `abs-items.controller.ts` — `?include=progress` now emits
+  `userMediaProgress` even when null (explicit null); without the include the key is omitted.
+
+**Next: redeploy, open a book, hit play, scrub, background the app** — first live exercise of the
+file-stream route and `POST /api/session/local-all` write path.
+
 ## Don't re-do
 
 - Don't trust api.audiobookshelf.org for exact shapes — use the local ABS clone.

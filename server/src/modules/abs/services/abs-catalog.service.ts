@@ -175,8 +175,11 @@ export class AbsCatalogService {
     };
   }
 
-  /** `GET /api/items/:id` — single expanded (or minified) item with the user's progress. */
-  async getLibraryItem(user: RequestUser, bookId: number, minified = false): Promise<Record<string, unknown>> {
+  /**
+   * `GET /api/items/:id` — single expanded (or minified) item. With `?include=progress` ABS emits
+   * the userMediaProgress key even when the user has none (explicit null); without it, no key.
+   */
+  async getLibraryItem(user: RequestUser, bookId: number, minified = false, includeProgress = false): Promise<Record<string, unknown>> {
     const item = await this.readRepo.findItem(bookId);
     if (!item || item.status === 'processing') throw AbsHttpException.notFound();
     await this.assertLibraryAccess(user, item.libraryId);
@@ -185,7 +188,10 @@ export class AbsCatalogService {
       this.relationsFor([item]),
       this.progressService.getMediaProgress(user.id, bookId, item.libraryId),
     ]);
-    return toAbsLibraryItem(item, relations.get(item.id)!, { minified, mediaProgress: progress });
+    return toAbsLibraryItem(item, relations.get(item.id)!, {
+      minified,
+      mediaProgress: includeProgress ? (progress ?? null) : undefined,
+    });
   }
 
   /** `POST /api/items/batch/get` — fetch many items by id, access-filtered (no progress, as ABS). */

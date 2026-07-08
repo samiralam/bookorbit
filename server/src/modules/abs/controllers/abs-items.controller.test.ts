@@ -49,7 +49,13 @@ describe('AbsItemsController#getItem', () => {
   it('delegates to the catalog service, passing minified through', async () => {
     const { controller, catalogService } = build();
     await controller.getItem(makeAbsUser(), 'li_3', { minified: '1' });
-    expect(catalogService.getLibraryItem).toHaveBeenCalledWith(expect.anything(), 3, true);
+    expect(catalogService.getLibraryItem).toHaveBeenCalledWith(expect.anything(), 3, true, false);
+  });
+
+  it('requests progress attachment only when include contains progress', async () => {
+    const { controller, catalogService } = build();
+    await controller.getItem(makeAbsUser(), 'li_3', { expanded: '1', include: 'authors,progress' });
+    expect(catalogService.getLibraryItem).toHaveBeenCalledWith(expect.anything(), 3, false, true);
   });
 });
 
