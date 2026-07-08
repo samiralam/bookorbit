@@ -1,8 +1,25 @@
 # Prologue "empty library" debug — session handoff
 
-**Status:** in progress. Branch `implement-abs-api`. Test instance: `bookorbit-test.home.samiralam.com`.
-**Symptom:** logging into the test instance from Prologue (iOS Audiobookshelf client) shows libraries
-but no books. Login works; libraries list works.
+**Status: RESOLVED 2026-07-08.** Branch `implement-abs-api`. Test instance: `bookorbit-test.home.samiralam.com`.
+Prologue (iOS, build 10830) now works end-to-end against BookOrbit: login (OIDC), library browse
+with covers, item detail, direct-play streaming, progress sync (`POST /api/session/local-all`),
+and per-file downloads with correct queue metadata. Read the dated session sections bottom-up for
+the full causal chain; the one-paragraph summary:
+
+> The "empty library" was a stack of independent bugs uncovered one at a time, each masked by the
+> next: missing required keys (MediaProgress timestamps, Author.libraryId), the 120 req/min global
+> throttler 429ing Prologue's ~750-request sync bursts, expanded-vs-minified list shapes, and —
+> the final blocker — SUPERSET keys in minified items (`metadata.authors/narrators/series` arrays
+> etc.) that real ABS never emits there; strict-Codable clients throw on a present-but-narrower
+> optional just like on a missing required key. After that: item detail needed `media.tracks` +
+> `libraryFiles` (Prologue plays by streaming `tracks[].contentUrl` directly — it never calls
+> POST /play), silent playback was the capture proxy buffering 370MB responses (tooling, not
+> server), and the download-queue "?" was empty `metaTags` on audio files. Match ABS key sets AND
+> values exactly, per context (toOldJSON/Minified/Expanded) — the diff-against-real-ABS capture
+> workflow below is the way to do it.
+
+**Symptom (original):** logging into the test instance from Prologue shows libraries but no books.
+Login works; libraries list works.
 
 > **2026-07-07 update — read "Session 2026-07-07" at the bottom first.** The `missing.authors` filter
 > is fixed+deployed+verified and did NOT fix it. Decisive new facts: (a) the sync DOES retry ~2s apart
@@ -494,14 +511,16 @@ reads), `?token=` auth on the file route works, and `POST /api/session/local-all
 `{results:[{id,success,progressSynced}]}` shape. When debugging media through the proxy, remember:
 logged byte counts are what UPSTREAM sent, not what the phone consumed.
 
-**Download works; queue shows "?" instead of title/cover (open).** The per-file download
-(`GET /api/items/:id/file/:ino/download`) returns 200 with a proper Content-Disposition filename;
-no request around it fails — so the "?" is rendered from decoded data. Best remaining value-level
-deviation: our audio files carried `metaTags: {}` and zeroed timestamps, while real ABS files always
-have `tagTitle`/`tagArtist`/`tagAlbum` (a queue row titled by tag renders "?" when nil). Fix applied
-(hypothesis, awaiting retest): `abs-item.mapper.ts` audio files/tracks/libraryFiles now carry
-`metaTags` (tagTitle/tagAlbum = book title, tagArtist = authors) and the item's real
-added/updated timestamps; also removed the not-in-ABS `invalid` key from audio files.
+**Download-queue "?" — FIXED, CONFIRMED on device.** The per-file download
+(`GET /api/items/:id/file/:ino/download`) returned 200 with a proper Content-Disposition filename
+and no failing request anywhere — the "?" was rendered from decoded data. Cause: our audio files
+carried `metaTags: {}` and zeroed timestamps, while real ABS files always have
+`tagTitle`/`tagArtist`/`tagAlbum` from the probe — Prologue titles download-queue rows from the
+file's tags and renders "?" when they're nil. Fix (verified by redeploy + retest):
+`abs-item.mapper.ts` audio files/tracks/libraryFiles now carry `metaTags` (tagTitle/tagAlbum =
+book title, tagArtist = authors) and the item's real added/updated timestamps; also removed the
+not-in-ABS `invalid` key from audio files. Lesson: clients surface tag/timestamp VALUES directly —
+an empty-but-decodable value degrades UI even when the shape is perfect.
 
 ## Don't re-do
 
@@ -511,4 +530,34 @@ added/updated timestamps; also removed the not-in-ABS `invalid` key from audio f
 - Don't re-verify response shapes against the CURRENT public ShelfPlayerKit models — done
   programmatically 2026-07-07, zero violations (see Session 2026-07-07).
 - Don't re-test the UUID-id hypothesis — refuted 2026-07-08 via the id-rewrite proxy (see above).
-- Don't re-add "harmless" superset keys to minified shapes — that was the 2026-07-08 lead suspect.
+- Don't re-add "harmless" superset keys to minified shapes — that was the 2026-07-08 root cause.
+- Don't debug media playback THROUGH a buffering proxy — the capture proxy now streams binary,
+  but any new tooling must pipe media bodies, or AVPlayer stalls and the server looks guilty.
+
+## State for the next session (debugging other ABS clients)
+
+- **Uncommitted working-tree changes on `implement-abs-api`** (all tested: 284 ABS tests pass,
+  typecheck + lint clean — commit in reviewable chunks when ready):
+  - `server/src/modules/abs/mappers/abs-item.mapper.ts` (+test) — exact ABS minified/expanded item
+    shapes, tracks/libraryFiles/lastScan/scanVersion, metaTags + real file timestamps, 1-based
+    AudioFile index, Last-First authorNameLF, descriptionPlain.
+  - `server/src/modules/abs/services/abs-catalog.service.ts` (+test) — no userMediaProgress on
+    list rows; ABS echo-params envelope semantics (sortBy/filterBy/include omitted when absent);
+    series/collections envelopes + series element shape; include=progress on item detail emits
+    explicit-null userMediaProgress.
+  - `server/src/modules/abs/controllers/abs-items.controller.ts`, `abs-libraries.controller.ts`
+    (+tests) — include=progress parsing, rawSort passthrough.
+  - `server/src/modules/abs/mappers/abs-author.mapper.ts` — exported `toLastFirst`.
+  - `tools/abs-capture-proxy/abs-capture-proxy.mjs` — binary streaming + abort propagation.
+  - `tools/abs-capture-proxy/abs-id-rewrite-proxy.mjs` — NEW diagnostic tool (UUID-id rewriter).
+- **Debug workflow that cracked this** (reuse for the next client): capture proxy on :9000 with
+  DUMP=1 → reproduce against BookOrbit → same client against real ABS 2.35.1 (local clone at
+  `/Users/samiralam/Projects/Audiobookshelf` is the shape authority) → find the first request the
+  client makes against ABS but never against BookOrbit (that brackets the failing response) →
+  field-level diff that response pair (keys, types, AND values) → fix to exact ABS output.
+- The test instance must be redeployed by the user after each server fix; captures land in
+  `abs-capture/` (gitignored; earlier runs archived under `abs-capture/archive-*`).
+- Known cosmetic/data oddities parked: li_385 is an authorless book with an empty title;
+  `titleIgnorePrefix` doesn't move articles to the end; pre-existing `architecture-boundaries`
+  test failure (abs-session/abs-bookmark/abs-progress services inject DB directly) needs separate
+  cleanup.
