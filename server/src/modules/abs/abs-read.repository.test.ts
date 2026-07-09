@@ -58,3 +58,69 @@ describe('AbsReadRepository.filterWhere — missing.* group (ABS libraryItemsBoo
     expect(sql).toContain('book_authors');
   });
 });
+
+/**
+ * Captures the SQL each repository method executes by stubbing `pool.query` (still no DB). Queries
+ * resolve to empty result sets; methods that then throw on empty rows are caught — the SQL has
+ * already been recorded by that point.
+ */
+function captureQueries() {
+  const pool = new Pool();
+  const queries: { text: string; values: unknown[] }[] = [];
+  (pool as unknown as { query: (cfg: { text: string; values?: unknown[] } | string, values?: unknown[]) => Promise<unknown> }).query = (
+    cfg,
+    values,
+  ) => {
+    const text = typeof cfg === 'string' ? cfg : cfg.text;
+    queries.push({ text, values: (typeof cfg === 'string' ? values : (cfg.values ?? values)) ?? [] });
+    // collectionsForUser only runs its (gated) members query if the user has a collection row.
+    if (text.includes('from "collections"')) return Promise.resolve({ rows: [[1, 'c', null]], fields: [] });
+    return Promise.resolve({ rows: [], fields: [] });
+  };
+  const repo = new AbsReadRepository(drizzle(pool, { schema }));
+  return { repo, queries };
+}
+
+describe('ABS visibility gate — books without a playable audio content file are excluded', () => {
+  const hasAudioGate = (q: { text: string; values: unknown[] }) =>
+    q.text.includes('exists') && q.text.includes('"book_files"') && q.text.includes('lower(');
+
+  it('gates listItems and its count query, binding the content role and audio formats', async () => {
+    const { repo, queries } = captureQueries();
+    await repo.listItems({ libraryId: 1, limit: 10, offset: 0, sort: 'addedAt', desc: true }).catch(() => undefined);
+    expect(queries.length).toBeGreaterThan(0);
+    expect(queries.every(hasAudioGate)).toBe(true);
+    for (const value of ['content', 'm4b', 'm4a', 'mp3', 'opus', 'ogg', 'flac']) {
+      expect(queries[0].values).toContain(value);
+    }
+  });
+
+  it('gates single and batch item lookups (direct GET of an ebook-only item finds nothing)', async () => {
+    const { repo, queries } = captureQueries();
+    await repo.findItem(1);
+    await repo.findItemsByIds([1, 2]);
+    expect(queries).toHaveLength(2);
+    expect(queries.every(hasAudioGate)).toBe(true);
+  });
+
+  it('gates search, series, author, collection, and filter-data queries', async () => {
+    const { repo, queries } = captureQueries();
+    await repo.searchItems(1, 'dune', 5);
+    await repo.seriesInLibrary(1);
+    await repo.authorsInLibrary(1);
+    await repo.bookIdsForAuthor(7);
+    await repo.collectionsForUser(1, 1);
+    await repo.filterData(1);
+    // Every query except the ungated user-collections list must carry the audio-file predicate.
+    const gated = queries.filter((q) => !q.text.includes('from "collections"'));
+    expect(gated.length).toBeGreaterThanOrEqual(10);
+    expect(gated.every(hasAudioGate)).toBe(true);
+    expect(queries.some((q) => q.text.includes('from "collections"'))).toBe(true);
+  });
+
+  it('still keeps the processing-status gate alongside the audio gate', async () => {
+    const { repo, queries } = captureQueries();
+    await repo.listItems({ libraryId: 1, limit: 10, offset: 0, sort: 'addedAt', desc: true }).catch(() => undefined);
+    expect(queries[0].text).toContain("<> 'processing'");
+  });
+});

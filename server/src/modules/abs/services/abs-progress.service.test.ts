@@ -1,6 +1,7 @@
 import { AbsProgressService } from './abs-progress.service';
 import * as schema from '../../../db/schema';
-import type { AbsAudioFileRow } from '../abs-read.repository';
+import { encodeAbsId } from '../abs-id.util';
+import type { AbsAudioFileRow, AbsReadRepository } from '../abs-read.repository';
 
 function file(id: number, durationSeconds: number): AbsAudioFileRow {
   return { id, bookId: 1, format: 'mp3', sortOrder: id, durationSeconds, sizeBytes: 1000, absolutePath: `/x/${id}.mp3` };
@@ -92,5 +93,52 @@ describe('AbsProgressService#toMediaProgress shape', () => {
     // (0 for audio), never null — strict clients decode both.
     expect(progress.userId).toBe(`usr_${row.userId}`);
     expect(progress.ebookProgress).toBe(0);
+  });
+});
+
+describe('AbsProgressService#listMediaProgressForUser', () => {
+  /** Chainable select stub: each `db.select()` resolves to the next queued result set. */
+  function fakeDb(results: unknown[][]): never {
+    let call = 0;
+    const chain = (result: unknown[]) => {
+      const q = {
+        from: () => q,
+        where: () => q,
+        limit: () => q,
+        then: (onFulfilled: (rows: unknown[]) => unknown) => Promise.resolve(result).then(onFulfilled),
+      };
+      return q;
+    };
+    return { select: () => chain(results[call++]) } as never;
+  }
+
+  function progressRow(bookId: number): schema.AudiobookProgress {
+    return {
+      userId: 3,
+      bookId,
+      percentage: 10,
+      currentFileId: 10,
+      positionSeconds: 30,
+      updatedAt: new Date('2026-06-01T00:00:00Z'),
+    } as schema.AudiobookProgress;
+  }
+
+  it('drops progress rows for books the read repository no longer returns (e.g. ebook-only)', async () => {
+    // Book 1 is a visible audiobook; book 2 has a progress row but is hidden by the repository's
+    // playable-audio gate, so findItemsByIds omits it — its progress must not reach /api/me.
+    const readRepo = {
+      audioFilesByBookIds: vi.fn().mockResolvedValue([file(10, 100)]),
+      findItemsByIds: vi.fn().mockResolvedValue([{ id: 1, libraryId: 5 }]),
+    } as unknown as AbsReadRepository;
+    const db = fakeDb([
+      [progressRow(1), progressRow(2)], // audiobook_progress rows
+      [{ markAsFinishedPercentComplete: 98 }], // finishPercentForLibrary(5)
+    ]);
+
+    const service = new AbsProgressService(readRepo, db);
+    const result = await service.listMediaProgressForUser(3);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].libraryItemId).toBe(encodeAbsId('libraryItem', 1));
   });
 });

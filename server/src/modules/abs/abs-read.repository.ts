@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, desc, eq, ilike, inArray, isNotNull, ne, notInArray, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, ilike, inArray, isNotNull, ne, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 
@@ -76,6 +76,30 @@ export class AbsReadRepository {
     };
   }
 
+  /** Conditions selecting playable audio content rows in `book_files` (shared with {@link hasPlayableAudio}). */
+  private audioContentFileConditions(): SQL[] {
+    return [eq(schema.bookFiles.role, 'content'), inArray(sql`lower(${schema.bookFiles.format})`, AUDIO_FORMATS)];
+  }
+
+  /** Correlated predicate: the book has at least one playable audio content file. */
+  private hasPlayableAudio(): SQL {
+    return exists(
+      this.db
+        .select({ one: sql`1` })
+        .from(schema.bookFiles)
+        .where(and(eq(schema.bookFiles.bookId, schema.books.id), ...this.audioContentFileConditions())),
+    );
+  }
+
+  /**
+   * Base visibility gate for every book the ABS API exposes: fully scanned (not `processing`) and
+   * with playable audio. Ebook-only books are intentionally invisible to ABS clients — they would
+   * render as track-less, unplayable items — until `ebookFile` support is implemented.
+   */
+  private visibleBookConditions(): SQL[] {
+    return [sql`${schema.books.status} <> 'processing'`, this.hasPlayableAudio()];
+  }
+
   private orderExpr(field: AbsItemSortField, descending: boolean): SQL[] {
     const dir = descending ? desc : asc;
     switch (field) {
@@ -98,11 +122,7 @@ export class AbsReadRepository {
     desc: boolean;
     extraWhere?: SQL;
   }): Promise<{ rows: AbsItemRow[]; total: number }> {
-    const where = and(
-      eq(schema.books.libraryId, opts.libraryId),
-      sql`${schema.books.status} <> 'processing'`,
-      ...(opts.extraWhere ? [opts.extraWhere] : []),
-    );
+    const where = and(eq(schema.books.libraryId, opts.libraryId), ...this.visibleBookConditions(), ...(opts.extraWhere ? [opts.extraWhere] : []));
 
     const rows = (await this.db
       .select({ ...this.baseItemSelect(), _total: sql<number>`count(*) over()`.as('_total') })
@@ -121,7 +141,7 @@ export class AbsReadRepository {
     const [{ total }] = await this.db
       .select({ total: sql<number>`count(*)` })
       .from(schema.books)
-      .where(and(eq(schema.books.libraryId, libraryId), sql`${schema.books.status} <> 'processing'`, ...(extraWhere ? [extraWhere] : [])));
+      .where(and(eq(schema.books.libraryId, libraryId), ...this.visibleBookConditions(), ...(extraWhere ? [extraWhere] : [])));
     return Number(total);
   }
 
@@ -130,7 +150,7 @@ export class AbsReadRepository {
       .select(this.baseItemSelect())
       .from(schema.books)
       .leftJoin(schema.bookMetadata, eq(schema.bookMetadata.bookId, schema.books.id))
-      .where(eq(schema.books.id, bookId))
+      .where(and(eq(schema.books.id, bookId), ...this.visibleBookConditions()))
       .limit(1);
     return row ?? null;
   }
@@ -141,7 +161,7 @@ export class AbsReadRepository {
       .select(this.baseItemSelect())
       .from(schema.books)
       .leftJoin(schema.bookMetadata, eq(schema.bookMetadata.bookId, schema.books.id))
-      .where(inArray(schema.books.id, bookIds));
+      .where(and(inArray(schema.books.id, bookIds), ...this.visibleBookConditions()));
   }
 
   /** Authors for a set of books, ordered for display. */
@@ -198,13 +218,7 @@ export class AbsReadRepository {
         absolutePath: schema.bookFiles.absolutePath,
       })
       .from(schema.bookFiles)
-      .where(
-        and(
-          inArray(schema.bookFiles.bookId, bookIds),
-          eq(schema.bookFiles.role, 'content'),
-          inArray(sql`lower(${schema.bookFiles.format})`, AUDIO_FORMATS),
-        ),
-      )
+      .where(and(inArray(schema.bookFiles.bookId, bookIds), ...this.audioContentFileConditions()))
       .orderBy(asc(schema.bookFiles.bookId), asc(schema.bookFiles.sortOrder), asc(schema.bookFiles.id));
   }
 
@@ -381,7 +395,7 @@ export class AbsReadRepository {
       .where(
         and(
           eq(schema.books.libraryId, libraryId),
-          sql`${schema.books.status} <> 'processing'`,
+          ...this.visibleBookConditions(),
           or(ilike(schema.bookMetadata.title, term), inArray(schema.books.id, matchingAuthorBookIds)),
         ),
       )
@@ -401,7 +415,7 @@ export class AbsReadRepository {
       .from(schema.bookSeriesMemberships)
       .innerJoin(schema.bookSeries, eq(schema.bookSeries.id, schema.bookSeriesMemberships.seriesId))
       .innerJoin(schema.books, eq(schema.books.id, schema.bookSeriesMemberships.bookId))
-      .where(and(eq(schema.books.libraryId, libraryId), sql`${schema.books.status} <> 'processing'`))
+      .where(and(eq(schema.books.libraryId, libraryId), ...this.visibleBookConditions()))
       .orderBy(asc(schema.bookSeries.name), asc(schema.bookSeriesMemberships.seriesIndex), asc(schema.bookSeriesMemberships.bookId));
 
     const byId = new Map<number, { id: number; name: string; books: { bookId: number; sequence: number | null }[] }>();
@@ -421,7 +435,7 @@ export class AbsReadRepository {
     const bookIdsForLibrary = this.db
       .select({ id: schema.books.id })
       .from(schema.books)
-      .where(and(eq(schema.books.libraryId, libraryId), sql`${schema.books.status} <> 'processing'`));
+      .where(and(eq(schema.books.libraryId, libraryId), ...this.visibleBookConditions()));
 
     return this.db
       .select({
@@ -453,7 +467,7 @@ export class AbsReadRepository {
       .from(schema.bookAuthors)
       .innerJoin(schema.books, eq(schema.books.id, schema.bookAuthors.bookId))
       .leftJoin(schema.bookMetadata, eq(schema.bookMetadata.bookId, schema.books.id))
-      .where(and(eq(schema.bookAuthors.authorId, authorId), sql`${schema.books.status} <> 'processing'`))
+      .where(and(eq(schema.bookAuthors.authorId, authorId), ...this.visibleBookConditions()))
       .orderBy(asc(schema.bookMetadata.title), asc(schema.books.id));
     return rows.map((r) => r.id);
   }
@@ -481,7 +495,7 @@ export class AbsReadRepository {
             cols.map((c) => c.id),
           ),
           eq(schema.books.libraryId, libraryId),
-          sql`${schema.books.status} <> 'processing'`,
+          ...this.visibleBookConditions(),
         ),
       )
       .orderBy(asc(schema.collectionBooks.addedAt));
@@ -507,7 +521,7 @@ export class AbsReadRepository {
     const bookIdsForLibrary = this.db
       .select({ id: schema.books.id })
       .from(schema.books)
-      .where(and(eq(schema.books.libraryId, libraryId), sql`${schema.books.status} <> 'processing'`));
+      .where(and(eq(schema.books.libraryId, libraryId), ...this.visibleBookConditions()));
 
     const [authors, narrators, series, genres, tags, languages] = await Promise.all([
       this.db

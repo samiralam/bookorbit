@@ -71,7 +71,10 @@ selection, so the first enabled provider is used.
 - [ ] `POST /items/:id/chapters`
 - [ ] `GET /items/:id/ffprobe/:fileid`
 - [ ] `DELETE /items/:id/file/:fileid`
-- [ ] `GET /items/:id/ebook/:fileid?`, `PATCH /items/:id/ebook/:fileid/status`
+- [ ] `GET /items/:id/ebook/:fileid?`, `PATCH /items/:id/ebook/:fileid/status` — note: until ebook
+      support lands (`ebookFile` is always `null`), books without a playable audio content file are
+      intentionally invisible to ABS clients: `AbsReadRepository` gates every book query on an
+      audio-content-file `EXISTS` (they would otherwise render as track-less, unplayable items)
 
 ### Current user (`/me`)
 
