@@ -1,15 +1,18 @@
 # ABS API — Implementation TODO
 
 Gap list between the documented upstream surface ([`ENDPOINTS.md`](./ENDPOINTS.md), ~215 routes)
-and the routes actually wired up in `server/src/modules/abs/`. Generated 2026-06-19.
+and the routes actually wired up in `server/src/modules/abs/`. Generated 2026-06-19; refreshed
+2026-07-12 against the controllers and [`ABS_SERVER_DEBUG_LOG.md`](./ABS_SERVER_DEBUG_LOG.md).
 
 **★** = client-critical per `ENDPOINTS.md` (needed for a working mobile/web client). These should be
 prioritised. Unmarked rows are admin/server-management routes that may be deferred by design — confirm
 against `REIMPLEMENTATION_GUIDE.md` / `BOOKORBIT_PLANNING_PROMPT.md` before treating as required.
 
-> Status snapshot: ~36/215 routes implemented (the client-critical vertical slice). Controllers present:
-> `abs-libraries`, `abs-items`, `abs-me`, `abs-sessions`, `abs-playlists` (list only), `abs-public`,
-> `abs-hls`, `abs-authorize`, `auth/abs-auth`, `auth/abs-discovery`, `auth/abs-openid`.
+> Status snapshot (2026-07-12): ~53/215 routes implemented (the client-critical vertical slice —
+> verified end-to-end with Prologue, see the debug log). Controllers present: `abs-libraries`,
+> `abs-items` (incl. `batch/get`, file stream/download, cover), `abs-me`, `abs-sessions`,
+> `abs-playlists` (list only), `abs-authors` (`GET :id` only), `abs-public`, `abs-hls`,
+> `abs-authorize`, `auth/abs-auth`, `auth/abs-discovery`, `auth/abs-openid`.
 
 ---
 
@@ -81,10 +84,12 @@ selection, so the first enabled provider is used.
 - [x] `GET /me/listening-sessions` — returns an empty ABS history page (BookOrbit keeps no ABS-shaped session history); satisfies clients (e.g. Prologue) that probe it on connect
 - [x] `GET /me/item/listening-sessions/:libraryItemId/:episodeId?` — empty page (same rationale as `listening-sessions`); decodes the item id to 404 on garbage (episode param N/A — BookOrbit items have no episodes)
 - [x] `GET /me/listening-stats` — zeroed stats envelope (no per-session history retained)
-- [ ] `GET /me/progress/:id/remove-from-continue-listening` — needs a `hideFromContinueListening` column on `audiobook_progress` (mapper currently hardcodes `false`); defer to its own migration PR
+- [x] `GET /me/progress/:id/remove-from-continue-listening` — persisted `hide_from_continue_listening` flag on `audiobook_progress` (migration 0024); clears when the position moves, ABS-asymmetric shelf filtering (`/personalized` filters hidden, `items-in-progress` does not). See debug log session 2026-07-12
 - [x] `DELETE /me/progress/:id` — deletes the `audiobook_progress` row via `AbsProgressService#deleteProgress`; accepts the composite `usr_<u>-li_<b>` id (or bare `li_<b>`), verifies the user segment, 404 when absent
 - [x] `PATCH /me/password` — delegates to `AuthService.changePassword` (single source of truth: hashing, audit event, web-session revocation, OIDC/shared blocking); maps to ABS wire shapes (demo → 403, bad input/wrong current password → 400 text, success → 200). Enforces BookOrbit's password policy so the ABS route isn't a weak-password side door
-- [ ] `GET /me/series/:id/remove-from-continue-listening` / `readd-to-continue-listening`
+- [ ] `GET /me/series/:id/remove-from-continue-listening` / `readd-to-continue-listening` — blocked
+      on storage: ABS keeps this in user `extraData.seriesHideFromContinueListening`, which has no
+      BookOrbit home yet; implement when a client is seen calling it (Still hit the item-level route)
 - [x] `GET /me/stats/year/:year` — zeroed year-in-review envelope (no per-session history retained)
 - [ ] `POST /me/ereader-devices`
 
@@ -154,6 +159,33 @@ podcast support is added to BookOrbit. Even the ★ client-critical markings bel
 - [ ] **Podcasts** (`/api/podcasts`) — 13 routes (feed parse, OPML, episodes, downloads, match)
 
 ---
+
+## Behavioral gaps — routes that exist but don't match ABS semantics/values
+
+The route checklist above misses these: the endpoint responds with a valid ABS shape, but the
+_content_ diverges from what real ABS 2.35.1 would return (the debug log proved values matter as
+much as shapes to strict clients).
+
+- **No listening-session history.** `GET /me/listening-sessions`, `/me/item/listening-sessions/...`,
+  `/me/listening-stats`, and `/me/stats/year/:year` always return empty pages / zeroed envelopes —
+  BookOrbit persists progress but not ABS-shaped session records. Clients' history/stats screens
+  render empty. Also blocks the admin session routes (`GET /sessions`, `/sessions/open`, …).
+- **Playlists are a hardcoded empty list.** `GET /api/playlists` returns `{results: [], total: 0}`;
+  no playlist model exists. Any client playlist UI is inert.
+- **Ebook-only books are invisible by design.** `AbsReadRepository` gates every query on an
+  audio-content-file `EXISTS`; `ebookFile` is always `null` and the `/items/:id/ebook` routes are
+  absent. ABS ereader clients see an audiobook-only subset of the library.
+- **`titleIgnorePrefix` / `nameIgnorePrefix` don't move articles** ("The …" sorts under T).
+- **Socket surface is the client-critical subset only.** Implemented: `auth`/`init`/`auth_failed`,
+  `ping`/`pong`, `user_item_progress_updated`, `user_session_closed`, `stream_reset`, item/library
+  added/updated/removed. Missing vs `SocketAuthority`: `user_online`/`user_offline` presence
+  (`init.usersOnline` is always `[]`), `user_updated`, scan/task/backup progress events,
+  `admin_message`, cover-search events.
+- **No user `extraData`** (`seriesHideFromContinueListening` etc.) — blocks the series-level
+  continue-listening routes above.
+- Parked data oddities (from the debug log): `li_385` is an authorless book with an empty title;
+  pre-existing `architecture-boundaries.test.ts` failure (abs-session/abs-bookmark/abs-progress
+  inject DB directly) needs its own cleanup.
 
 ## Notes
 
