@@ -80,6 +80,46 @@ describe('AbsMeController#deleteProgress', () => {
   });
 });
 
+describe('AbsMeController#removeFromContinueListening', () => {
+  const meReq = { headers: { authorization: 'Bearer abs-jwt' } } as unknown as FastifyRequest;
+
+  function build(hidden = true) {
+    const progressService = {
+      hideFromContinueListening: vi.fn().mockResolvedValue(hidden),
+      listMediaProgressForUser: vi.fn().mockResolvedValue([{ id: 'usr_8-li_42', hideFromContinueListening: true }]),
+    } as unknown as AbsProgressService;
+    const libraryService = { findAccessibleLibraryIds: vi.fn().mockResolvedValue([3]) } as unknown as LibraryService;
+    const bookmarkService = { listForUser: vi.fn().mockResolvedValue([]) } as unknown as AbsBookmarkService;
+    const controller = new AbsMeController(progressService, libraryService, {} as unknown as AbsCatalogService, bookmarkService, noopAuthService);
+    return { controller, progressService };
+  }
+
+  it('hides by the composite progress id and responds with the full user JSON, like ABS', async () => {
+    const { controller, progressService } = build();
+    const user = await controller.removeFromContinueListening(makeAbsUser({ id: 8, isSuperuser: false }), 'usr_8-li_42', meReq);
+    expect(progressService.hideFromContinueListening).toHaveBeenCalledWith(8, 42);
+    expect(user.id).toBe('usr_8');
+    expect(user.mediaProgress).toEqual([{ id: 'usr_8-li_42', hideFromContinueListening: true }]);
+  });
+
+  it('also accepts a bare library item id', async () => {
+    const { controller, progressService } = build();
+    await controller.removeFromContinueListening(makeAbsUser({ id: 8 }), 'li_42', meReq);
+    expect(progressService.hideFromContinueListening).toHaveBeenCalledWith(8, 42);
+  });
+
+  it('404s when the composite id names a different user', async () => {
+    const { controller, progressService } = build();
+    await expect(thrownStatus(() => controller.removeFromContinueListening(makeAbsUser({ id: 8 }), 'usr_9-li_42', meReq))).resolves.toBe(404);
+    expect(progressService.hideFromContinueListening).not.toHaveBeenCalled();
+  });
+
+  it('404s when there is no progress row to hide', async () => {
+    const { controller } = build(false);
+    await expect(thrownStatus(() => controller.removeFromContinueListening(makeAbsUser({ id: 8 }), 'usr_8-li_42', meReq))).resolves.toBe(404);
+  });
+});
+
 describe('AbsMeController stub stats endpoints', () => {
   function build() {
     return new AbsMeController(

@@ -1,0 +1,1 @@
+ALTER TABLE "audiobook_progress" ADD COLUMN "hide_from_continue_listening" boolean DEFAULT false NOT NULL;

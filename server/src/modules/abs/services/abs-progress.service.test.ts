@@ -52,6 +52,7 @@ describe('AbsProgressService#toMediaProgress shape', () => {
     percentage: 1,
     currentFileId: 10,
     positionSeconds: 30,
+    hideFromContinueListening: false,
     updatedAt: new Date('2026-06-01T00:00:00Z'),
   } as schema.AudiobookProgress;
 
@@ -93,6 +94,17 @@ describe('AbsProgressService#toMediaProgress shape', () => {
     // (0 for audio), never null — strict clients decode both.
     expect(progress.userId).toBe(`usr_${row.userId}`);
     expect(progress.ebookProgress).toBe(0);
+  });
+
+  // "Remove from Continue Listening" persists on the row; the mapper must mirror it, not hardcode false.
+  it('mirrors the persisted hideFromContinueListening flag', () => {
+    const hiddenRow = { ...row, hideFromContinueListening: true } as schema.AudiobookProgress;
+    const progress = (
+      service as unknown as {
+        toMediaProgress: (b: number, r: schema.AudiobookProgress, f: AbsAudioFileRow[], p: number) => Record<string, unknown>;
+      }
+    ).toMediaProgress(427, hiddenRow, [file(10, 100)], 98);
+    expect(progress.hideFromContinueListening).toBe(true);
   });
 });
 

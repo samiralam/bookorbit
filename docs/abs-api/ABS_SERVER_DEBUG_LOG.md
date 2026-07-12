@@ -522,6 +522,34 @@ book title, tagArtist = authors) and the item's real added/updated timestamps; a
 not-in-ABS `invalid` key from audio files. Lesson: clients surface tag/timestamp VALUES directly —
 an empty-but-decodable value degrades UI even when the shape is perfect.
 
+## Session 2026-07-12 — Still client: "Remove from Continue" 404 → route implemented
+
+Still's "Remove from Continue" calls `GET /api/me/progress/:id/remove-from-continue-listening`
+(ABS `MeController.removeItemFromContinueListening`) — we had no such route, hence the 404.
+Implemented to match ABS exactly (uncommitted on `implement-abs-api`; 294 ABS tests pass,
+typecheck + lint clean):
+
+- **Schema**: `audiobook_progress.hide_from_continue_listening` boolean NOT NULL default false
+  (`reader.ts`; incremental migration `0024_add_hide_from_continue_listening.sql` — NOT applied
+  locally, Docker was down; applies on next `db:migrate`/deploy). Note: the DEVELOPMENT.md
+  "single baseline migration" note is stale — the folder already has 24 incremental migrations.
+- **Route** (`abs-me.controller.ts`): marks the row hidden, 404s when the id is malformed/foreign/
+  has no progress row, and responds with the FULL `/api/me` user JSON (ABS returns
+  `toOldJSONForBrowser()` there, not an ok-stub). Declared before `progress/:id/:episodeId?`;
+  Fastify prefers the static tail segment anyway.
+- **Semantics** (`abs-progress.service.ts`, mirroring ABS `MediaProgress.applyProgressUpdate`):
+  `toMediaProgress` now emits the persisted flag (was hardcoded false); progress upserts clear the
+  flag ONLY when the position actually moved (SQL CASE comparing existing row vs new placement —
+  in `ON CONFLICT DO UPDATE`, unqualified/table-qualified refs are the existing row, `excluded.*`
+  is the new one), and an explicit `hideFromContinueListening` in the PATCH body wins.
+- **Shelf filtering matches ABS asymmetry**: the `/personalized` continue-listening shelf excludes
+  hidden items (`libraryItemsBookFilters.js` filters only `isHomePage`); `/me/items-in-progress`
+  does NOT filter hidden — left unfiltered on purpose, don't "fix" it.
+
+Known gap: series-level `GET /api/me/series/:id/remove-from-continue-listening` (and
+`readd-to-continue-listening`) still 404 — ABS stores that in user `extraData`, which we have no
+home for yet. Implement if a client is seen calling it.
+
 ## Don't re-do
 
 - Don't trust api.audiobookshelf.org for exact shapes — use the local ABS clone.

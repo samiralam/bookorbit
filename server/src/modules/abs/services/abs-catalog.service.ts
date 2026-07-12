@@ -407,7 +407,8 @@ export class AbsCatalogService {
   }
 
   private async itemsInProgressForLibrary(user: RequestUser, libraryId: number): Promise<Record<string, unknown>[]> {
-    const bookIds = await this.progressService.listInProgressBookIds(user.id);
+    // ABS respects hideFromContinueListening only on the home-page shelves, not items-in-progress.
+    const bookIds = await this.progressService.listInProgressBookIds(user.id, { excludeHidden: true });
     const rows = (await this.readRepo.findItemsByIds(bookIds)).filter((r) => r.libraryId === libraryId);
     const ordered = orderByIds(rows, bookIds);
     return this.assembleItems(ordered, true);

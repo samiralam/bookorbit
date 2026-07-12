@@ -1,5 +1,20 @@
 import { sql } from 'drizzle-orm';
-import { check, date, index, integer, jsonb, pgTable, primaryKey, real, serial, text, timestamp, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  check,
+  date,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  real,
+  serial,
+  text,
+  timestamp,
+  uniqueIndex,
+  varchar,
+} from 'drizzle-orm/pg-core';
 import type { ReadStatus, ReadStatusSource, ReadingAttemptOrigin, ReadingAttemptOutcome, ReadingSessionSource } from '@bookorbit/types';
 
 import { bookFiles, books } from './books';
@@ -274,6 +289,8 @@ export const audiobookProgress = pgTable(
       .notNull()
       .references(() => bookFiles.id, { onDelete: 'cascade' }),
     positionSeconds: real('position_seconds').notNull().default(0),
+    // ABS MediaProgress "remove from Continue Listening" flag; reset when playback position moves.
+    hideFromContinueListening: boolean('hide_from_continue_listening').notNull().default(false),
     updatedAt: timestamp('updated_at', { withTimezone: true })
       .notNull()
       .defaultNow()

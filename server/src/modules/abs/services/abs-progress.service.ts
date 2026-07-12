@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, gt, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, lt, sql } from 'drizzle-orm';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import { DB } from '../../../db';
@@ -16,6 +16,8 @@ export interface AbsProgressInput {
   duration?: number;
   /** Explicit finished flag (e.g. "mark as finished" from the client). */
   isFinished?: boolean;
+  /** Explicit hide-from-continue flag; when absent, an existing hide resets once the position moves. */
+  hideFromContinueListening?: boolean;
 }
 
 /** Raw PATCH /me/progress body — `progress` (0..1) is accepted as an alternative to `currentTime`. */
@@ -24,6 +26,7 @@ export interface AbsProgressBody {
   duration?: number;
   progress?: number;
   isFinished?: boolean;
+  hideFromContinueListening?: boolean;
 }
 
 /**
@@ -138,7 +141,7 @@ export class AbsProgressService {
       currentTime,
       progress: isFinished ? 1 : progress,
       isFinished,
-      hideFromContinueListening: false,
+      hideFromContinueListening: row.hideFromContinueListening,
       // ABS always emits these; strict Codable clients (e.g. Prologue) decode the whole
       // MediaProgress object and drop the entire item list if a required key is absent. Live ABS
       // 2.35.1 sends ebookLocation null but ebookProgress 0 for audio (it coalesces null to 0 on
@@ -170,12 +173,37 @@ export class AbsProgressService {
     let percentage = duration > 0 ? Math.min(100, Math.max(0, (input.currentTime / duration) * 100)) : 0;
     if (input.isFinished) percentage = 100;
 
+    // ABS `MediaProgress.applyProgressUpdate`: an explicit flag in the payload wins; otherwise an
+    // existing hide is cleared only when the position actually moved (so idle re-syncs of the same
+    // position don't resurface a hidden item on the Continue shelf).
+    const hideFromContinueListening =
+      input.hideFromContinueListening ??
+      sql<boolean>`case
+        when ${schema.audiobookProgress.currentFileId} <> ${placement.fileId}
+          or ${schema.audiobookProgress.positionSeconds} <> ${placement.positionSeconds}
+        then false
+        else ${schema.audiobookProgress.hideFromContinueListening}
+      end`;
+
     await this.db
       .insert(schema.audiobookProgress)
-      .values({ userId, bookId, percentage, currentFileId: placement.fileId, positionSeconds: placement.positionSeconds })
+      .values({
+        userId,
+        bookId,
+        percentage,
+        currentFileId: placement.fileId,
+        positionSeconds: placement.positionSeconds,
+        hideFromContinueListening: input.hideFromContinueListening ?? false,
+      })
       .onConflictDoUpdate({
         target: [schema.audiobookProgress.userId, schema.audiobookProgress.bookId],
-        set: { percentage, currentFileId: placement.fileId, positionSeconds: placement.positionSeconds, updatedAt: new Date() },
+        set: {
+          percentage,
+          currentFileId: placement.fileId,
+          positionSeconds: placement.positionSeconds,
+          hideFromContinueListening,
+          updatedAt: new Date(),
+        },
       });
 
     const [row] = await this.db
@@ -196,16 +224,38 @@ export class AbsProgressService {
     return row?.updatedAt ?? null;
   }
 
-  /** Book ids the user has started but not completed, most-recently-updated first (Continue shelf). */
-  async listInProgressBookIds(userId: number): Promise<number[]> {
+  /**
+   * Book ids the user has started but not completed, most-recently-updated first (Continue shelf).
+   * `excludeHidden` mirrors ABS, which respects `hideFromContinueListening` only on the home-page
+   * shelves (`/personalized`), not on `/me/items-in-progress`.
+   */
+  async listInProgressBookIds(userId: number, opts: { excludeHidden?: boolean } = {}): Promise<number[]> {
     const rows = await this.db
       .select({ bookId: schema.audiobookProgress.bookId })
       .from(schema.audiobookProgress)
       .where(
-        and(eq(schema.audiobookProgress.userId, userId), gt(schema.audiobookProgress.percentage, 0), lt(schema.audiobookProgress.percentage, 100)),
+        and(
+          eq(schema.audiobookProgress.userId, userId),
+          gt(schema.audiobookProgress.percentage, 0),
+          lt(schema.audiobookProgress.percentage, 100),
+          opts.excludeHidden ? eq(schema.audiobookProgress.hideFromContinueListening, false) : undefined,
+        ),
       )
       .orderBy(desc(schema.audiobookProgress.updatedAt));
     return rows.map((r) => r.bookId);
+  }
+
+  /**
+   * "Remove from Continue Listening": mark the progress row hidden (ABS
+   * `MeController.removeItemFromContinueListening`). Returns false when there is no row (→ 404).
+   */
+  async hideFromContinueListening(userId: number, bookId: number): Promise<boolean> {
+    const updated = await this.db
+      .update(schema.audiobookProgress)
+      .set({ hideFromContinueListening: true })
+      .where(and(eq(schema.audiobookProgress.userId, userId), eq(schema.audiobookProgress.bookId, bookId)))
+      .returning({ bookId: schema.audiobookProgress.bookId });
+    return updated.length > 0;
   }
 
   /** Delete a user's progress for one book. Returns false when there was no row to remove (→ 404). */
@@ -244,6 +294,7 @@ export class AbsProgressService {
       currentTime: currentTime ?? 0,
       duration: body.duration,
       isFinished: body.isFinished,
+      hideFromContinueListening: body.hideFromContinueListening,
     });
   }
 

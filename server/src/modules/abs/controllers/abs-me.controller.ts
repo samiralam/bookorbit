@@ -104,6 +104,25 @@ export class AbsMeController {
     return { total: 0, numPages: 0, page, itemsPerPage, sessions: [] };
   }
 
+  /**
+   * "Remove from Continue Listening" (ABS `MeController.removeItemFromContinueListening`). Marks the
+   * progress row hidden and, like ABS, responds with the full `/api/me` user JSON. 404 when the id is
+   * malformed, names another user, or there is no progress row. Declared before `progress/:id/:episodeId?`
+   * so the static tail segment wins the route match.
+   */
+  @Get('progress/:id/remove-from-continue-listening')
+  async removeFromContinueListening(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Req() req: FastifyRequest,
+  ): Promise<Record<string, unknown>> {
+    const bookId = this.resolveProgressBookId(user, id);
+    if (bookId === null) throw AbsHttpException.notFound();
+    const hidden = await this.progressService.hideFromContinueListening(user.id, bookId);
+    if (!hidden) throw AbsHttpException.notFound();
+    return this.me(user, req);
+  }
+
   /** Read one MediaProgress; 404 when there is none. Episode segment is ignored (no podcasts). */
   @Get('progress/:id/:episodeId?')
   async getProgress(@CurrentUser() user: RequestUser, @Param('id') id: string): Promise<Record<string, unknown>> {
