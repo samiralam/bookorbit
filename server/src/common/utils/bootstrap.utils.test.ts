@@ -264,12 +264,33 @@ describe('empty request body bootstrap handling', () => {
     const chunks: Buffer[] = [];
 
     for await (const chunk of stream) {
+      // Fastify Buffer.concat()s the raw chunks without coercion; a string chunk crashes the process.
       expect(Buffer.isBuffer(chunk)).toBe(true);
       chunks.push(Buffer.from(chunk));
     }
 
     expect(headers['content-length']).toBe('2');
     expect(Buffer.concat(chunks).toString('utf8')).toBe('{}');
+  });
+
+  it('parses an empty application/json request through the real JSON parser without crashing', async () => {
+    // Regression: Plappa sends POST /api/authorize with content-type application/json and
+    // content-length 0. The injected replacement stream must yield Buffer chunks — Fastify's
+    // default JSON parser Buffer.concat()s them, and a string chunk threw an uncatchable
+    // ERR_INVALID_ARG_TYPE inside a stream callback, killing the server process.
+    await withEmptyJsonHookApp(async (app) => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/body',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': '0',
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ body: {} });
+    });
   });
 
   it('accepts empty unsupported content types as an empty object', async () => {
@@ -374,6 +395,26 @@ describe('empty request body bootstrap handling', () => {
 async function withParserApp(run: (app: FastifyInstance) => Promise<void>): Promise<void> {
   const app = Fastify({ logger: false });
   registerEmptyBodyContentTypeParser(app);
+  app.post('/body', (request) => ({ body: request.body ?? null }));
+
+  try {
+    await app.ready();
+    await run(app);
+  } finally {
+    await app.close();
+  }
+}
+
+/** A Fastify app wired with the same empty-JSON-body preParsing hook as `main.ts`. */
+async function withEmptyJsonHookApp(run: (app: FastifyInstance) => Promise<void>): Promise<void> {
+  const app = Fastify({ logger: false });
+  app.addHook('preParsing', (request, _reply, payload, done) => {
+    if (shouldInjectEmptyJsonBody(request.method, request.headers)) {
+      done(null, buildEmptyJsonBodyStream(request.headers));
+      return;
+    }
+    done(null, payload);
+  });
   app.post('/body', (request) => ({ body: request.body ?? null }));
 
   try {

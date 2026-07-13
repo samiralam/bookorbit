@@ -12,6 +12,7 @@ import { encodeAbsId } from '../abs-id.util';
 import { AbsExceptionFilter } from '../abs-exception.filter';
 import { AbsHttpException } from '../abs-errors';
 import { toAbsLoginPayload } from '../mappers/abs-user.mapper';
+import { AbsProgressService } from '../services/abs-progress.service';
 import { AbsAuthGuard } from './abs-auth.guard';
 import { AbsSessionService } from './abs-session.service';
 
@@ -55,6 +56,7 @@ export class AbsOpenidController {
     private readonly userService: UserService,
     private readonly sessionService: AbsSessionService,
     private readonly libraryService: LibraryService,
+    private readonly progressService: AbsProgressService,
     config: ConfigService,
   ) {
     this.appOrigin = safeOrigin(config.get<string>('app.appUrl') ?? '');
@@ -149,11 +151,16 @@ export class AbsOpenidController {
       return;
     }
 
-    // Mobile/native (and web without a usable callback): tokens in the JSON body (mirrors POST /login).
-    const accessibleIds = await this.libraryService.findAccessibleLibraryIds(user);
+    // Mobile/native (and web without a usable callback): tokens in the JSON body (mirrors POST /login,
+    // including the user's full mediaProgress — clients seed cross-device resume positions from it).
+    const [accessibleIds, mediaProgress] = await Promise.all([
+      this.libraryService.findAccessibleLibraryIds(user),
+      this.progressService.listMediaProgressForUser(user.id),
+    ]);
     const payload = toAbsLoginPayload(user, {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
+      mediaProgress,
       librariesAccessible: user.isSuperuser ? [] : accessibleIds.map((id) => encodeAbsId('library', id)),
       userDefaultLibraryId: accessibleIds.length ? encodeAbsId('library', accessibleIds[0]) : null,
     });

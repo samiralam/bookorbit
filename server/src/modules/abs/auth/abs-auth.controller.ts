@@ -10,6 +10,7 @@ import { AbsExceptionFilter } from '../abs-exception.filter';
 import { AbsHttpException } from '../abs-errors';
 import { ABS_INTERNAL_REFRESH_PATH } from '../abs-route-rewrite.util';
 import { toAbsLoginPayload } from '../mappers/abs-user.mapper';
+import { AbsProgressService } from '../services/abs-progress.service';
 import { AbsSessionService } from './abs-session.service';
 import { AbsTokenService } from './abs-token.service';
 
@@ -35,6 +36,7 @@ export class AbsAuthController {
     private readonly sessionService: AbsSessionService,
     private readonly tokenService: AbsTokenService,
     private readonly libraryService: LibraryService,
+    private readonly progressService: AbsProgressService,
   ) {}
 
   @Post('login')
@@ -58,10 +60,17 @@ export class AbsAuthController {
       userAgent: req.headers['user-agent'],
     });
 
-    const accessibleIds = await this.libraryService.findAccessibleLibraryIds(user);
+    // ABS embeds the user's full mediaProgress in every login-shaped payload (`Auth.js`
+    // `getUserLoginResponsePayload` → `toOldJSONForBrowser`); clients like Plappa seed their
+    // cross-device resume positions from it, so an empty array reads as "no progress anywhere".
+    const [accessibleIds, mediaProgress] = await Promise.all([
+      this.libraryService.findAccessibleLibraryIds(user),
+      this.progressService.listMediaProgressForUser(user.id),
+    ]);
     return toAbsLoginPayload(user, {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
+      mediaProgress,
       librariesAccessible: user.isSuperuser ? [] : accessibleIds.map((id) => encodeAbsId('library', id)),
       userDefaultLibraryId: accessibleIds.length ? encodeAbsId('library', accessibleIds[0]) : null,
     });
@@ -82,10 +91,14 @@ export class AbsAuthController {
     const user = userId ? await this.userService.findByIdWithPermissions(userId) : null;
     if (!user) throw AbsHttpException.json(401, { error: 'Invalid refresh token' });
 
-    const accessibleIds = await this.libraryService.findAccessibleLibraryIds(user);
+    const [accessibleIds, mediaProgress] = await Promise.all([
+      this.libraryService.findAccessibleLibraryIds(user),
+      this.progressService.listMediaProgressForUser(user.id),
+    ]);
     return toAbsLoginPayload(user, {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
+      mediaProgress,
       librariesAccessible: user.isSuperuser ? [] : accessibleIds.map((id) => encodeAbsId('library', id)),
       userDefaultLibraryId: accessibleIds.length ? encodeAbsId('library', accessibleIds[0]) : null,
     });

@@ -3,6 +3,7 @@ import { hash } from 'bcryptjs';
 import type { LibraryService } from '../../library/library.service';
 import type { UserService } from '../../user/user.service';
 import { makeAbsUser, makeRequest, thrownStatus } from '../__testing__/abs-test-helpers';
+import type { AbsProgressService } from '../services/abs-progress.service';
 import { AbsAuthController } from './abs-auth.controller';
 import type { AbsSessionService } from './abs-session.service';
 import type { AbsTokenService } from './abs-token.service';
@@ -18,6 +19,7 @@ interface BuildOpts {
   candidate?: Record<string, unknown> | null;
   user?: ReturnType<typeof makeAbsUser> | null;
   accessibleIds?: number[];
+  mediaProgress?: Record<string, unknown>[];
 }
 
 function build(opts: BuildOpts = {}) {
@@ -36,7 +38,16 @@ function build(opts: BuildOpts = {}) {
   const libraryService = {
     findAccessibleLibraryIds: vi.fn().mockResolvedValue(opts.accessibleIds ?? []),
   } as unknown as LibraryService;
-  return { controller: new AbsAuthController(userService, sessionService, tokenService, libraryService), userService, sessionService, tokenService };
+  const progressService = {
+    listMediaProgressForUser: vi.fn().mockResolvedValue(opts.mediaProgress ?? []),
+  } as unknown as AbsProgressService;
+  return {
+    controller: new AbsAuthController(userService, sessionService, tokenService, libraryService, progressService),
+    userService,
+    sessionService,
+    tokenService,
+    progressService,
+  };
 }
 
 describe('AbsAuthController#login', () => {
@@ -51,6 +62,16 @@ describe('AbsAuthController#login', () => {
     expect(payload.userDefaultLibraryId).toBe('lib_4');
     expect(user.librariesAccessible).toEqual(['lib_4', 'lib_9']);
     expect(sessionService.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("embeds the user's mediaProgress in the login payload (clients seed resume positions from it)", async () => {
+    const candidate = { id: 1, active: true, lockedUntil: null, passwordHash: PASSWORD_HASH };
+    const progress = [{ libraryItemId: 'li_9', currentTime: 120 }];
+    const { controller, progressService } = build({ candidate, user: makeAbsUser({ id: 1, isSuperuser: false }), mediaProgress: progress });
+
+    const payload = await controller.login({ username: 'admin', password: PASSWORD }, makeRequest());
+    expect((payload.user as Record<string, unknown>).mediaProgress).toEqual(progress);
+    expect(progressService.listMediaProgressForUser).toHaveBeenCalledWith(1);
   });
 
   it('rejects missing credentials with 401', async () => {
@@ -90,6 +111,14 @@ describe('AbsAuthController#refresh', () => {
     expect(sessionService.rotate).toHaveBeenCalledWith('old-ref');
     expect(user.accessToken).toBe('acc2');
     expect(user.refreshToken).toBe('ref2');
+  });
+
+  it("embeds the user's mediaProgress in the refresh payload", async () => {
+    const progress = [{ libraryItemId: 'li_9', currentTime: 120 }];
+    const { controller, progressService } = build({ user: makeAbsUser({ id: 1 }), mediaProgress: progress });
+    const payload = await controller.refresh(makeRequest({ headers: { 'x-refresh-token': 'old-ref' } }));
+    expect((payload.user as Record<string, unknown>).mediaProgress).toEqual(progress);
+    expect(progressService.listMediaProgressForUser).toHaveBeenCalledWith(1);
   });
 
   it('returns 401 JSON when no refresh token header is present', async () => {

@@ -607,6 +607,50 @@ playback since the play-response mediaMetadata shape changed.
 - Don't debug media playback THROUGH a buffering proxy — the capture proxy now streams binary,
   but any new tooling must pipe media bodies, or AVPlayer stalls and the server looks guilty.
 
+## Session 2026-07-13 — Plappa spotty position sync (RESOLVED: server crash on empty JSON body)
+
+**Symptom:** Plappa (iOS, build 76) syncs its own position fine but never adopts positions set by
+other clients (Prologue) and keeps reset books under "Where I left off". Looked like client-side
+caching; wasn't.
+
+**How Plappa syncs (confirmed via capture + [plappa#128](https://github.com/LeoKlaus/plappa/issues/128)):**
+it calls `POST /api/authorize` at launch and on every foreground, and merges the returned
+`user.mediaProgress` against its local (iCloud-synced) state by **timestamp** (`lastUpdate`) —
+newest wins. It does NOT use `include=progress` on items, does not call `/personalized`, and does
+not retry a failed `/api/authorize`. It reports progress via `POST /api/session/local` (singular)
+and uploads offline sessions via `POST /api/session/local-all` on foreground.
+
+**Root cause 1 — process crash on empty JSON bodies (the direct cause).** CFNetwork sends
+`POST /api/authorize` with `Content-Type: application/json` + `Content-Length: 0`. Our
+`preParsing` empty-body shim (`bootstrap.utils.ts buildEmptyJsonBodyStream`) injected the _string_
+`'{}'`; Fastify's content-type parser `Buffer.concat`s raw chunks and threw an uncatchable
+`ERR_INVALID_ARG_TYPE` inside a stream callback → **process exit** → Caddy answered `EOF`/dial
+refused (empty-body 502s) for ~4–11s until Docker restarted the container. So every Plappa
+launch/foreground killed the server mid-`/api/authorize`, and Plappa silently fell back to local
+state. Diagnosed by pairing the capture log's 502 bursts with container + Caddy logs at the same
+timestamps. FIXED: emit a Buffer chunk; regression test drives the real Fastify JSON parser
+through the main.ts hook.
+
+**Root cause 2 — login-shaped payloads had `mediaProgress: []`.** `POST /login`,
+`POST /auth/refresh`, and the ABS OIDC callback built `toAbsLoginPayload` without fetching
+progress; real ABS embeds the user's full mediaProgress in every login payload
+(`Auth.js getUserLoginResponsePayload` → `toOldJSONForBrowser`). Only `/api/authorize` populated
+it. FIXED: all three now fetch `listMediaProgressForUser` (mirrors abs-authorize.controller).
+
+**Debug lessons:**
+
+- A 502 with an EMPTY body from Caddy = it couldn't reach the backend (`dial ... connection
+refused` / `EOF` in Caddy's log); pull container + reverse-proxy logs for the exact timestamps
+  before theorizing about keep-alive races (probed 5s/72s idle windows — red herring).
+- When replaying a client request with curl, copy ALL semantically relevant headers: the crash
+  only triggered with `Content-Type: application/json` on a zero-length body — repro attempts
+  without it passed and nearly exonerated the server.
+- The capture proxy dumps only 4xx/5xx JSON bodies with headers; Caddy logs the client's full
+  request headers (Authorization redacted) — that's where the Content-Length: 0 fingerprint was.
+- Parked: ABS honors a client-supplied `lastUpdate` on progress writes
+  (`MediaProgress.applyProgressUpdate` "For local sync"); we always stamp `now()`. Fine for
+  online clients, could mis-order offline batch merges — revisit with `session/local-all` work.
+
 ## State for the next session (debugging other ABS clients)
 
 - **Uncommitted working-tree changes on `implement-abs-api`** (all tested: 326 ABS tests pass,

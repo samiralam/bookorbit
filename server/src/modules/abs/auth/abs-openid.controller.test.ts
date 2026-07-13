@@ -4,6 +4,7 @@ import type { OidcService } from '../../auth/oidc/oidc.service';
 import type { LibraryService } from '../../library/library.service';
 import type { UserService } from '../../user/user.service';
 import { makeAbsUser, makeRequest, thrownStatus } from '../__testing__/abs-test-helpers';
+import type { AbsProgressService } from '../services/abs-progress.service';
 import { AbsOpenidController } from './abs-openid.controller';
 import type { AbsSessionService } from './abs-session.service';
 
@@ -36,6 +37,7 @@ interface BuildOpts {
   mobileAppRedirect?: string | null;
   user?: ReturnType<typeof makeAbsUser> | null;
   accessibleIds?: number[];
+  mediaProgress?: Record<string, unknown>[];
   discoveryDoc?: Record<string, unknown>;
   allowedAppRedirects?: string[];
 }
@@ -59,10 +61,14 @@ function build(opts: BuildOpts = {}) {
   const config = {
     get: vi.fn((key: string) => (key === 'app.absAllowedAppRedirects' ? (opts.allowedAppRedirects ?? []) : APP_URL)),
   } as unknown as ConfigService;
+  const progressService = {
+    listMediaProgressForUser: vi.fn().mockResolvedValue(opts.mediaProgress ?? []),
+  } as unknown as AbsProgressService;
   return {
-    controller: new AbsOpenidController(oidcService, userService, sessionService, libraryService, config),
+    controller: new AbsOpenidController(oidcService, userService, sessionService, libraryService, progressService, config),
     oidcService,
     sessionService,
+    progressService,
   };
 }
 
@@ -221,6 +227,16 @@ describe('AbsOpenidController#callback', () => {
     expect(user.librariesAccessible).toEqual(['lib_4']);
     expect(calls.status).toBe(200);
     expect(sessionService.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("embeds the user's mediaProgress in the login payload (clients seed resume positions from it)", async () => {
+    const progress = [{ libraryItemId: 'li_9', currentTime: 120 }];
+    const { controller, progressService } = build({ resolve: { user: { id: 1 }, authMethod: 'openid-mobile' }, mediaProgress: progress });
+    const { reply, calls } = makeReply();
+    await controller.callback(makeRequest({ query: { code: 'c', state: 's', code_verifier: 'v' } }), reply);
+    const user = (calls.body as Record<string, unknown>).user as Record<string, unknown>;
+    expect(user.mediaProgress).toEqual(progress);
+    expect(progressService.listMediaProgressForUser).toHaveBeenCalledWith(1);
   });
 
   it('forwards the client code_verifier to the resolver', async () => {

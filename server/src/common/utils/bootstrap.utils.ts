@@ -80,6 +80,8 @@ export function shouldInjectEmptyJsonBody(method: string, headers: IncomingHttpH
 
 export function buildEmptyJsonBodyStream(headers: IncomingHttpHeaders): Readable {
   headers['content-length'] = String(Buffer.byteLength(EMPTY_JSON_BODY));
+  // Must be a Buffer chunk: Fastify's content-type parser Buffer.concat()s the raw chunks and
+  // throws (crashing the process) on string chunks.
   return Readable.from([Buffer.from(EMPTY_JSON_BODY)]);
 }
 
