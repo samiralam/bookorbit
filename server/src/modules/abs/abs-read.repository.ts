@@ -185,6 +185,16 @@ export class AbsReadRepository {
       .orderBy(asc(schema.bookNarrators.bookId), asc(schema.bookNarrators.displayOrder));
   }
 
+  async genresByBookIds(bookIds: number[]): Promise<{ bookId: number; name: string }[]> {
+    if (bookIds.length === 0) return [];
+    return this.db
+      .select({ bookId: schema.bookGenres.bookId, name: schema.genres.name })
+      .from(schema.bookGenres)
+      .innerJoin(schema.genres, eq(schema.genres.id, schema.bookGenres.genreId))
+      .where(inArray(schema.bookGenres.bookId, bookIds))
+      .orderBy(asc(schema.bookGenres.bookId), asc(schema.genres.name));
+  }
+
   async seriesByBookIds(bookIds: number[]): Promise<{ bookId: number; id: number; name: string; sequence: number | null }[]> {
     if (bookIds.length === 0) return [];
     return this.db

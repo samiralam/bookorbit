@@ -32,6 +32,7 @@ import { toAbsUser } from '../mappers/abs-user.mapper';
 import { AbsBookmarkService } from '../services/abs-bookmark.service';
 import { AbsCatalogService } from '../services/abs-catalog.service';
 import { AbsProgressService, type AbsProgressBody } from '../services/abs-progress.service';
+import { AbsSessionHistoryService } from '../services/abs-session-history.service';
 
 interface BookmarkBody {
   time?: number;
@@ -64,6 +65,7 @@ export class AbsMeController {
     private readonly catalogService: AbsCatalogService,
     private readonly bookmarkService: AbsBookmarkService,
     private readonly authService: AuthService,
+    private readonly sessionHistoryService: AbsSessionHistoryService,
   ) {}
 
   @Get()
@@ -90,18 +92,10 @@ export class AbsMeController {
     return { libraryItems };
   }
 
-  /**
-   * Paginated listening history (REIMPLEMENTATION_GUIDE §8). BookOrbit does not retain ABS-shaped
-   * historical sessions, so this returns an empty page in the ABS envelope — enough for clients
-   * (e.g. Prologue) that probe it on connect and render a "History" tab.
-   */
+  /** Paginated listening history from the persisted session log (REIMPLEMENTATION_GUIDE §7/§8). */
   @Get('listening-sessions')
-  listeningSessions(@Query() query: Record<string, string>): Record<string, unknown> {
-    const parsed = Number.parseInt(query.itemsPerPage ?? '', 10);
-    const itemsPerPage = Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
-    const parsedPage = Number.parseInt(query.page ?? '', 10);
-    const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 0;
-    return { total: 0, numPages: 0, page, itemsPerPage, sessions: [] };
+  async listeningSessions(@CurrentUser() user: RequestUser, @Query() query: Record<string, string>): Promise<Record<string, unknown>> {
+    return this.sessionHistoryService.listeningSessions(user, query ?? {});
   }
 
   /**
@@ -211,47 +205,27 @@ export class AbsMeController {
     }
   }
 
-  /**
-   * Per-item listening history (REIMPLEMENTATION_GUIDE §8). Like `listening-sessions`, BookOrbit keeps
-   * no ABS-shaped sessions, so this is an empty page; the id is still decoded to 404 on garbage input.
-   */
+  /** Per-item listening history; 404s on garbage/unknown ids (episode segment ignored — no podcasts). */
   @Get('item/listening-sessions/:libraryItemId/:episodeId?')
-  itemListeningSessions(@Param('libraryItemId') libraryItemId: string, @Query() query: Record<string, string>): Record<string, unknown> {
-    if (decodeAbsId('libraryItem', libraryItemId) === null) throw AbsHttpException.notFound();
-    const parsed = Number.parseInt(query.itemsPerPage ?? '', 10);
-    const itemsPerPage = Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
-    const parsedPage = Number.parseInt(query.page ?? '', 10);
-    const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 0;
-    return { total: 0, numPages: 0, page, itemsPerPage, sessions: [] };
+  async itemListeningSessions(
+    @CurrentUser() user: RequestUser,
+    @Param('libraryItemId') libraryItemId: string,
+    @Query() query: Record<string, string>,
+  ): Promise<Record<string, unknown>> {
+    return this.sessionHistoryService.itemListeningSessions(user, libraryItemId, query ?? {});
   }
 
-  /**
-   * Aggregate listening stats. BookOrbit retains no per-session history, so every bucket is empty —
-   * enough for clients that render a stats screen without erroring on a missing payload.
-   */
+  /** Aggregate listening stats over the persisted session log. */
   @Get('listening-stats')
-  listeningStats(): Record<string, unknown> {
-    return { totalTime: 0, items: {}, days: {}, dayOfWeek: {}, today: 0, recentSessions: [] };
+  async listeningStats(@CurrentUser() user: RequestUser): Promise<Record<string, unknown>> {
+    return this.sessionHistoryService.listeningStats(user);
   }
 
-  /** Year-in-review stats — zeroed for the same reason as `listening-stats` (no session history). */
+  /** Year-in-review stats. Bad years behave like empty years (ABS returns zeroed stats too). */
   @Get('stats/year/:year')
-  statsForYear(): Record<string, unknown> {
-    return {
-      totalListeningSessions: 0,
-      totalListeningTime: 0,
-      totalBookListeningTime: 0,
-      totalPodcastListeningTime: 0,
-      topAuthors: [],
-      topGenres: [],
-      mostListenedNarrator: null,
-      mostListenedMonth: null,
-      numBooksFinished: 0,
-      numBooksListened: 0,
-      longestAudiobookFinished: null,
-      booksWithCovers: [],
-      finishedBooksWithCovers: [],
-    };
+  async statsForYear(@CurrentUser() user: RequestUser, @Param('year') year: string): Promise<Record<string, unknown>> {
+    const parsedYear = Number.parseInt(year, 10);
+    return this.sessionHistoryService.statsForYear(user, Number.isFinite(parsedYear) ? parsedYear : 0);
   }
 
   /** Create (or rename in place) an audio bookmark at `{ time, title }`. */

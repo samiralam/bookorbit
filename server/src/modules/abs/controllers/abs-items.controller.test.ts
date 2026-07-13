@@ -62,14 +62,14 @@ describe('AbsItemsController#getItem', () => {
 describe('AbsItemsController#play', () => {
   it('404s on a malformed item id', async () => {
     const { controller } = build();
-    expect(await thrownStatus(() => controller.play(makeAbsUser(), 'nope', {}))).toBe(404);
+    expect(await thrownStatus(() => controller.play(makeAbsUser(), 'nope', {}, makeRequest()))).toBe(404);
   });
 
-  it('starts a playback session for a valid item', async () => {
+  it('starts a playback session for a valid item, threading the caller ip for deviceInfo', async () => {
     const { controller, playbackService } = build();
     const body = { supportedMimeTypes: ['audio/mpeg'] };
-    const session = await controller.play(makeAbsUser(), 'li_3', body);
-    expect(playbackService.startSession).toHaveBeenCalledWith(expect.anything(), 3, body);
+    const session = await controller.play(makeAbsUser(), 'li_3', body, makeRequest());
+    expect(playbackService.startSession).toHaveBeenCalledWith(expect.anything(), 3, body, undefined);
     expect(session).toMatchObject({ id: 'sess-1' });
   });
 });

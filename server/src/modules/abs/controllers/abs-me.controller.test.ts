@@ -7,36 +7,23 @@ import type { LibraryService } from '../../library/library.service';
 import type { AbsBookmarkService } from '../services/abs-bookmark.service';
 import type { AbsCatalogService } from '../services/abs-catalog.service';
 import type { AbsProgressService } from '../services/abs-progress.service';
+import type { AbsSessionHistoryService } from '../services/abs-session-history.service';
 import { makeAbsUser, thrownStatus } from '../__testing__/abs-test-helpers';
 import { AbsMeController } from './abs-me.controller';
 
 const noopAuthService = {} as unknown as AuthService;
+const noopHistoryService = {} as unknown as AbsSessionHistoryService;
 
 function build(progress: Record<string, unknown>[], accessibleIds: number[]) {
   const progressService = { listMediaProgressForUser: vi.fn().mockResolvedValue(progress) } as unknown as AbsProgressService;
   const libraryService = { findAccessibleLibraryIds: vi.fn().mockResolvedValue(accessibleIds) } as unknown as LibraryService;
   const catalogService = {} as unknown as AbsCatalogService;
   const bookmarkService = { listForUser: vi.fn().mockResolvedValue([]) } as unknown as AbsBookmarkService;
-  return { controller: new AbsMeController(progressService, libraryService, catalogService, bookmarkService, noopAuthService), progressService };
+  return {
+    controller: new AbsMeController(progressService, libraryService, catalogService, bookmarkService, noopAuthService, noopHistoryService),
+    progressService,
+  };
 }
-
-describe('AbsMeController#listeningSessions', () => {
-  it('returns an empty ABS history page echoing pagination params', () => {
-    const { controller } = build([], []);
-    expect(controller.listeningSessions({ page: '2', itemsPerPage: '25' })).toEqual({
-      total: 0,
-      numPages: 0,
-      page: 2,
-      itemsPerPage: 25,
-      sessions: [],
-    });
-  });
-
-  it('defaults to page 0 / itemsPerPage 10 when params are missing or invalid', () => {
-    const { controller } = build([], []);
-    expect(controller.listeningSessions({})).toMatchObject({ page: 0, itemsPerPage: 10, sessions: [] });
-  });
-});
 
 describe('AbsMeController#deleteProgress', () => {
   function build(removed = true) {
@@ -47,6 +34,7 @@ describe('AbsMeController#deleteProgress', () => {
       {} as unknown as AbsCatalogService,
       {} as unknown as AbsBookmarkService,
       noopAuthService,
+      noopHistoryService,
     );
     return { controller, progressService };
   }
@@ -90,7 +78,14 @@ describe('AbsMeController#removeFromContinueListening', () => {
     } as unknown as AbsProgressService;
     const libraryService = { findAccessibleLibraryIds: vi.fn().mockResolvedValue([3]) } as unknown as LibraryService;
     const bookmarkService = { listForUser: vi.fn().mockResolvedValue([]) } as unknown as AbsBookmarkService;
-    const controller = new AbsMeController(progressService, libraryService, {} as unknown as AbsCatalogService, bookmarkService, noopAuthService);
+    const controller = new AbsMeController(
+      progressService,
+      libraryService,
+      {} as unknown as AbsCatalogService,
+      bookmarkService,
+      noopAuthService,
+      noopHistoryService,
+    );
     return { controller, progressService };
   }
 
@@ -120,42 +115,50 @@ describe('AbsMeController#removeFromContinueListening', () => {
   });
 });
 
-describe('AbsMeController stub stats endpoints', () => {
+describe('AbsMeController history/stats endpoints (delegation to AbsSessionHistoryService)', () => {
   function build() {
-    return new AbsMeController(
+    const historyService = {
+      listeningSessions: vi.fn().mockResolvedValue({ total: 0, numPages: 0, page: 0, itemsPerPage: 10, sessions: [] }),
+      itemListeningSessions: vi.fn().mockResolvedValue({ total: 0, numPages: 0, page: 0, itemsPerPage: 10, sessions: [] }),
+      listeningStats: vi.fn().mockResolvedValue({ totalTime: 0 }),
+      statsForYear: vi.fn().mockResolvedValue({ totalListeningTime: 0 }),
+    } as unknown as AbsSessionHistoryService;
+    const controller = new AbsMeController(
       {} as unknown as AbsProgressService,
       {} as unknown as LibraryService,
       {} as unknown as AbsCatalogService,
       {} as unknown as AbsBookmarkService,
       noopAuthService,
+      historyService,
     );
+    return { controller, historyService };
   }
 
-  it('returns an empty per-item listening-sessions page echoing pagination params', () => {
-    expect(build().itemListeningSessions('li_42', { page: '2', itemsPerPage: '25' })).toEqual({
-      total: 0,
-      numPages: 0,
-      page: 2,
-      itemsPerPage: 25,
-      sessions: [],
-    });
+  it('listening-sessions passes the caller and query through', async () => {
+    const { controller, historyService } = build();
+    const query = { page: '2', itemsPerPage: '25' };
+    await controller.listeningSessions(makeAbsUser({ id: 8 }), query);
+    expect(historyService.listeningSessions).toHaveBeenCalledWith(expect.objectContaining({ id: 8 }), query);
   });
 
-  it('404s per-item listening-sessions on a malformed library item id', () => {
-    expect(() => build().itemListeningSessions('nope', {})).toThrow();
+  it('item listening-sessions passes the raw item id for the service to decode/404', async () => {
+    const { controller, historyService } = build();
+    await controller.itemListeningSessions(makeAbsUser({ id: 8 }), 'li_42', {});
+    expect(historyService.itemListeningSessions).toHaveBeenCalledWith(expect.objectContaining({ id: 8 }), 'li_42', {});
   });
 
-  it('returns zeroed listening stats', () => {
-    expect(build().listeningStats()).toMatchObject({ totalTime: 0, items: {}, recentSessions: [] });
+  it('listening-stats delegates for the caller', async () => {
+    const { controller, historyService } = build();
+    await controller.listeningStats(makeAbsUser({ id: 8 }));
+    expect(historyService.listeningStats).toHaveBeenCalledWith(expect.objectContaining({ id: 8 }));
   });
 
-  it('returns zeroed year stats with array buckets', () => {
-    expect(build().statsForYear()).toMatchObject({
-      totalListeningTime: 0,
-      topAuthors: [],
-      longestAudiobookFinished: null,
-      finishedBooksWithCovers: [],
-    });
+  it('stats/year parses the year and coerces garbage to an empty year', async () => {
+    const { controller, historyService } = build();
+    await controller.statsForYear(makeAbsUser({ id: 8 }), '2026');
+    expect(historyService.statsForYear).toHaveBeenCalledWith(expect.objectContaining({ id: 8 }), 2026);
+    await controller.statsForYear(makeAbsUser({ id: 8 }), 'nope');
+    expect(historyService.statsForYear).toHaveBeenLastCalledWith(expect.anything(), 0);
   });
 });
 
@@ -193,7 +196,14 @@ describe('AbsMeController#me', () => {
     const libraryService = { findAccessibleLibraryIds: vi.fn().mockResolvedValue([]) } as unknown as LibraryService;
     const bookmarks = [{ libraryItemId: 'li_3', title: 'A quote', time: 120, createdAt: 0 }];
     const bookmarkService = { listForUser: vi.fn().mockResolvedValue(bookmarks) } as unknown as AbsBookmarkService;
-    const controller = new AbsMeController(progressService, libraryService, {} as unknown as AbsCatalogService, bookmarkService, noopAuthService);
+    const controller = new AbsMeController(
+      progressService,
+      libraryService,
+      {} as unknown as AbsCatalogService,
+      bookmarkService,
+      noopAuthService,
+      noopHistoryService,
+    );
 
     const user = await controller.me(makeAbsUser({ id: 8 }), meReq);
     expect(user.bookmarks).toEqual(bookmarks);

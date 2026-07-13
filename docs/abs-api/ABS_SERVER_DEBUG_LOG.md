@@ -550,6 +550,51 @@ Known gap: series-level `GET /api/me/series/:id/remove-from-continue-listening` 
 `readd-to-continue-listening`) still 404 — ABS stores that in user `extraData`, which we have no
 home for yet. Implement if a client is seen calling it.
 
+## Session 2026-07-13 — Listening sessions persisted; history/stats endpoints serve real data
+
+Implemented the persistent session log (plan: `make-a-plan-to-proud-stardust`), the biggest
+behavioral gap from the 2026-07-12 gap analysis. Uncommitted on `implement-abs-api`;
+326 ABS tests pass, full server suite 7025 passed (only the pre-existing architecture-boundaries
+failure — it did not grow), typecheck + lint clean.
+
+- **Schema**: new `abs_playback_sessions` table (`abs.ts`; migration
+  `0025_add_abs_playback_sessions.sql` — NOT applied locally, Docker was down again; applies on
+  next `db:migrate`/deploy, same as 0024). `id` uuid PK with NO default (client-suppliable for
+  local sessions), `user_id` FK cascade, `book_id`/`library_id` plain ints with **no FK** — an
+  immutable log that survives book/library deletion, like ABS. `current_time` is a Postgres
+  reserved word → `start_time_seconds`/`current_time_seconds`.
+- **Persistence semantics** (`abs-playback.service.ts`, verified against ABS
+  `PlaybackSessionManager`): row is inserted only once `timeListening > 0` (`persisted` flag ≙ ABS
+  `lastSave`); saves happen at end of `sync()`, in `close()` when no sync body applied, and on
+  device-takeover close; the 36h stale-prune does NOT save. `createdAt := startedAt`
+  (ABS `getFromOld`).
+- **`POST /session/local[-all]`** rewritten to ABS semantics: upsert by client-supplied session id
+  with ownership check; new rows snapshot metadata from the CURRENT server item; `playMethod ?? 3`.
+  `local` now responds bare 200 `"OK"` / 500-text (was JSON — wrong); `local-all` keeps
+  `{results:[{id,success,progressSynced,error?}]}`.
+- **Session `mediaMetadata` fixed to the full ABS `oldMetadataToJSON` 15-key shape**
+  (was a minimal subset — latent strict-Codable risk). This ALSO changes the
+  `POST /items/:id/play` response → **Prologue must be re-verified after redeploy**.
+  `deviceInfo` normalized per ABS `DeviceInfo.setData`/`toJSON` (clientName inference,
+  null-stripping); `req.ip` threaded from play/local controllers.
+- **Read side** (`abs-session-history.service.ts` + `mappers/abs-session.mapper.ts`): the four
+  `/me` endpoints (`listening-sessions`, `item/listening-sessions/:id`, `listening-stats`,
+  `stats/year/:year`) now serve real data mirroring `ApiRouter.getUserListeningStatsHelpers` /
+  `userStats.js getStatsForYear` bug-for-bug — including `listening-stats` `items[]` entries
+  having NO `lastUpdate` key (ABS 2.35.1 serializes undefined → key dropped; don't "fix" it).
+  Year stats approximate `finishedAt` as the progress row's `updatedAt` once past the library
+  finish threshold (BookOrbit persists no finish timestamp), and inner-join parity means finished
+  counts drop books deleted since.
+- **Deferred by decision**: admin `/api/sessions` routes (now unblocked, follow-up);
+  no retention/pruning of the log (ABS has none).
+- New DB access lives in `abs-playback-session.repository.ts` — repositories aren't scanned by the
+  architecture-boundaries test, so the pre-existing failure stayed at exactly 3 services.
+
+**Live verification pending (user-driven)**: redeploy bookorbit-test, then Prologue via the
+capture-proxy workflow — play → sync → close (row must appear only after real listening), History
+tab populates, stats + year-in-review render, offline `local-all` upload, and re-verify basic
+playback since the play-response mediaMetadata shape changed.
+
 ## Don't re-do
 
 - Don't trust api.audiobookshelf.org for exact shapes — use the local ABS clone.
@@ -564,20 +609,13 @@ home for yet. Implement if a client is seen calling it.
 
 ## State for the next session (debugging other ABS clients)
 
-- **Uncommitted working-tree changes on `implement-abs-api`** (all tested: 284 ABS tests pass,
-  typecheck + lint clean — commit in reviewable chunks when ready):
-  - `server/src/modules/abs/mappers/abs-item.mapper.ts` (+test) — exact ABS minified/expanded item
-    shapes, tracks/libraryFiles/lastScan/scanVersion, metaTags + real file timestamps, 1-based
-    AudioFile index, Last-First authorNameLF, descriptionPlain.
-  - `server/src/modules/abs/services/abs-catalog.service.ts` (+test) — no userMediaProgress on
-    list rows; ABS echo-params envelope semantics (sortBy/filterBy/include omitted when absent);
-    series/collections envelopes + series element shape; include=progress on item detail emits
-    explicit-null userMediaProgress.
-  - `server/src/modules/abs/controllers/abs-items.controller.ts`, `abs-libraries.controller.ts`
-    (+tests) — include=progress parsing, rawSort passthrough.
-  - `server/src/modules/abs/mappers/abs-author.mapper.ts` — exported `toLastFirst`.
-  - `tools/abs-capture-proxy/abs-capture-proxy.mjs` — binary streaming + abort propagation.
-  - `tools/abs-capture-proxy/abs-id-rewrite-proxy.mjs` — NEW diagnostic tool (UUID-id rewriter).
+- **Uncommitted working-tree changes on `implement-abs-api`** (all tested: 326 ABS tests pass,
+  typecheck + lint clean — commit in reviewable chunks, `db` type for the schema/migration):
+  - Session-persistence work from Session 2026-07-13 (see above): `db/schema/abs.ts` + migration
+    0025 (pending local apply — Docker down), `abs-playback-session.repository.ts` (+test),
+    `mappers/abs-session.mapper.ts` (+test), `services/abs-session-history.service.ts` (+test),
+    rewritten `services/abs-playback.service.ts` (+tests), `abs-read.repository.ts`
+    (`genresByBookIds`), controllers `abs-me`/`abs-sessions`/`abs-items` (+tests), `abs.module.ts`.
 - **Debug workflow that cracked this** (reuse for the next client): capture proxy on :9000 with
   DUMP=1 → reproduce against BookOrbit → same client against real ABS 2.35.1 (local clone at
   `/Users/samiralam/Projects/Audiobookshelf` is the shape authority) → find the first request the

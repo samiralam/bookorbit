@@ -1,4 +1,5 @@
 import type { LibraryService } from '../../library/library.service';
+import type { AbsPlaybackSessionRepository } from '../abs-playback-session.repository';
 import type { AbsAudioFileRow, AbsItemRow, AbsReadRepository } from '../abs-read.repository';
 import type { AbsSocketGateway } from '../abs-socket.gateway';
 import { makeAbsUser, thrownStatus } from '../__testing__/abs-test-helpers';
@@ -38,6 +39,8 @@ interface BuildOpts {
   audioFiles?: AbsAudioFileRow[];
   progress?: Record<string, unknown> | null;
   accessibleIds?: number[];
+  existingRow?: Record<string, unknown> | null;
+  mergeResult?: { progressSynced: boolean; mediaProgress: Record<string, unknown> | null };
 }
 
 function build(opts: BuildOpts = {}) {
@@ -48,10 +51,12 @@ function build(opts: BuildOpts = {}) {
     authorsByBookIds: vi.fn().mockResolvedValue([{ bookId: 3, id: 1, name: 'Tolkien' }]),
     narratorsByBookIds: vi.fn().mockResolvedValue([]),
     seriesByBookIds: vi.fn().mockResolvedValue([]),
+    genresByBookIds: vi.fn().mockResolvedValue([{ bookId: 3, name: 'Fantasy' }]),
   } as unknown as AbsReadRepository;
   const progressService = {
     getMediaProgress: vi.fn().mockResolvedValue(opts.progress ?? null),
     upsertFromCurrentTime: vi.fn().mockResolvedValue({ id: 'mp-1', progress: 0.5 }),
+    mergeOfflineProgress: vi.fn().mockResolvedValue(opts.mergeResult ?? { progressSynced: true, mediaProgress: { id: 'mp-1' } }),
   } as unknown as AbsProgressService;
   const socketGateway = {
     emitUserItemProgressUpdated: vi.fn(),
@@ -62,8 +67,14 @@ function build(opts: BuildOpts = {}) {
     createStream: vi.fn().mockResolvedValue('/hls/stream/output.m3u8'),
     closeStream: vi.fn().mockResolvedValue(undefined),
   } as unknown as AbsTranscodeService;
-  const service = new AbsPlaybackService(readRepo, progressService, socketGateway, libraryService, transcodeService);
-  return { service, readRepo, progressService, socketGateway, transcodeService };
+  const sessionRepo = {
+    insert: vi.fn().mockResolvedValue(undefined),
+    updateSync: vi.fn().mockResolvedValue(undefined),
+    updateFromLocal: vi.fn().mockResolvedValue(undefined),
+    findById: vi.fn().mockResolvedValue(opts.existingRow ?? null),
+  } as unknown as AbsPlaybackSessionRepository;
+  const service = new AbsPlaybackService(readRepo, progressService, socketGateway, libraryService, transcodeService, sessionRepo);
+  return { service, readRepo, progressService, socketGateway, transcodeService, sessionRepo };
 }
 
 describe('AbsPlaybackService#startSession', () => {
@@ -197,6 +208,187 @@ describe('AbsPlaybackService session lifecycle', () => {
     const second = await service.startSession(user, 3, { deviceInfo: { deviceId: 'dev-1' } });
     expect(await thrownStatus(() => service.getSession(first.id as string, user))).toBe(404);
     expect(service.getSession(second.id as string, user).id).toBe(second.id);
+  });
+});
+
+describe('AbsPlaybackService session persistence (ABS saveSession semantics)', () => {
+  it('persists nothing while timeListening is 0 (play + zero-listen sync + close)', async () => {
+    const { service, sessionRepo } = build();
+    const user = makeAbsUser({ id: 1 });
+    const started = await service.startSession(user, 3, {});
+    await service.sync(started.id as string, user, { currentTime: 10 }); // no timeListened
+    await service.close(started.id as string, user);
+    expect(sessionRepo.insert).not.toHaveBeenCalled();
+    expect(sessionRepo.updateSync).not.toHaveBeenCalled();
+  });
+
+  it('first save inserts the row, later saves update it', async () => {
+    const { service, sessionRepo } = build();
+    const user = makeAbsUser({ id: 1 });
+    const started = await service.startSession(user, 3, {});
+    const id = started.id as string;
+
+    await service.sync(id, user, { currentTime: 50, timeListened: 20 });
+    expect(sessionRepo.insert).toHaveBeenCalledTimes(1);
+    expect(sessionRepo.updateSync).not.toHaveBeenCalled();
+
+    await service.sync(id, user, { currentTime: 80, timeListened: 15 });
+    expect(sessionRepo.insert).toHaveBeenCalledTimes(1);
+    expect(sessionRepo.updateSync).toHaveBeenCalledTimes(1);
+    const update = (sessionRepo.updateSync as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(update[0]).toBe(id);
+    expect(update[1]).toMatchObject({ currentTime: 80, timeListening: 35 });
+  });
+
+  it('the inserted row snapshots the full ABS oldMetadataToJSON media metadata', async () => {
+    const { service, sessionRepo } = build();
+    const user = makeAbsUser({ id: 1 });
+    const started = await service.startSession(user, 3, { mediaPlayer: 'AVPlayer', deviceInfo: { deviceId: 'dev-1', model: 'iPhone' } });
+    await service.sync(started.id as string, user, { currentTime: 5, timeListened: 5 });
+
+    const row = (sessionRepo.insert as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, unknown>;
+    expect(row.id).toBe(started.id);
+    expect(row.userId).toBe(1);
+    expect(row.bookId).toBe(3);
+    expect(row.mediaPlayer).toBe('AVPlayer');
+    const meta = row.mediaMetadata as Record<string, unknown>;
+    expect(Object.keys(meta).sort()).toEqual(
+      [
+        'title',
+        'subtitle',
+        'authors',
+        'narrators',
+        'series',
+        'genres',
+        'publishedYear',
+        'publishedDate',
+        'publisher',
+        'description',
+        'isbn',
+        'asin',
+        'language',
+        'explicit',
+        'abridged',
+      ].sort(),
+    );
+    expect(meta.authors).toEqual([{ id: 'aut_1', name: 'Tolkien' }]);
+    expect(meta.genres).toEqual(['Fantasy']);
+    const deviceInfo = row.deviceInfo as Record<string, unknown>;
+    expect(deviceInfo.deviceId).toBe('dev-1');
+    expect(deviceInfo.clientName).toBe('Abs iOS'); // inferred from model, like ABS DeviceInfo.setData
+    expect(deviceInfo).not.toHaveProperty('manufacturer'); // nulls stripped
+  });
+
+  it('close without a sync body still saves an unsaved listened session', async () => {
+    const { service, sessionRepo } = build();
+    const user = makeAbsUser({ id: 1 });
+    const started = await service.startSession(user, 3, {});
+    const id = started.id as string;
+    // accumulate listening but sabotage the sync-path save by making it a no-op first:
+    await service.sync(id, user, { currentTime: 50, timeListened: 20 });
+    (sessionRepo.insert as ReturnType<typeof vi.fn>).mockClear();
+    await service.close(id, user); // no body → close's own saveSession runs (update path)
+    expect(sessionRepo.updateSync).toHaveBeenCalled();
+  });
+
+  it('device takeover saves the displaced session before dropping it', async () => {
+    const { service, sessionRepo } = build();
+    const user = makeAbsUser({ id: 1 });
+    const first = await service.startSession(user, 3, { deviceInfo: { deviceId: 'dev-1' } });
+    await service.sync(first.id as string, user, { currentTime: 50, timeListened: 20 });
+    (sessionRepo.insert as ReturnType<typeof vi.fn>).mockClear();
+    (sessionRepo.updateSync as ReturnType<typeof vi.fn>).mockClear();
+
+    await service.startSession(user, 3, { deviceInfo: { deviceId: 'dev-1' } });
+    expect(sessionRepo.updateSync).toHaveBeenCalledTimes(1); // displaced session saved
+  });
+
+  it('stale-session pruning does NOT save (matches ABS removeSession-only sweep)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { service, sessionRepo } = build();
+      const user = makeAbsUser({ id: 1 });
+      const started = await service.startSession(user, 3, {});
+      await service.sync(started.id as string, user, { currentTime: 50, timeListened: 20 });
+      (sessionRepo.insert as ReturnType<typeof vi.fn>).mockClear();
+      (sessionRepo.updateSync as ReturnType<typeof vi.fn>).mockClear();
+
+      vi.advanceTimersByTime(37 * 60 * 60 * 1000);
+      service.pruneStaleSessions();
+      expect(await thrownStatus(() => service.getSession(started.id as string, user))).toBe(404);
+      expect(sessionRepo.insert).not.toHaveBeenCalled();
+      expect(sessionRepo.updateSync).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('AbsPlaybackService#syncLocalSession (offline upsert)', () => {
+  it('rejects malformed payloads without touching the DB', async () => {
+    const { service, sessionRepo } = build();
+    const result = await service.syncLocalSession(makeAbsUser(), { libraryItemId: 'li_3' }); // no currentTime
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Invalid local session');
+    expect(sessionRepo.findById).not.toHaveBeenCalled();
+  });
+
+  it('reports "Media item not found" for an unknown book (ABS error string)', async () => {
+    const { service } = build({ item: null });
+    const result = await service.syncLocalSession(makeAbsUser(), { id: 's-1', libraryItemId: 'li_3', currentTime: 10 });
+    expect(result).toMatchObject({ id: 's-1', success: false, error: 'Media item not found' });
+  });
+
+  it('creates a new history row from the client payload, snapshotting server metadata', async () => {
+    const { service, sessionRepo } = build();
+    const result = await service.syncLocalSession(makeAbsUser({ id: 1 }), {
+      id: 's-local-1',
+      libraryItemId: 'li_3',
+      currentTime: 120,
+      timeListening: 90,
+      duration: 300,
+      startedAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_100_000,
+      mediaPlayer: 'ExoPlayer',
+    });
+    expect(result).toMatchObject({ id: 's-local-1', success: true, progressSynced: true });
+    const row = (sessionRepo.insert as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, unknown>;
+    expect(row.id).toBe('s-local-1');
+    expect(row.playMethod).toBe(3); // PlayMethod.LOCAL default
+    expect(row.timeListening).toBe(90);
+    expect(row.currentTimeSeconds).toBe(120);
+    expect((row.startedAt as Date).getTime()).toBe(1_700_000_000_000);
+    expect((row.createdAt as Date).getTime()).toBe(1_700_000_000_000); // createdAt := startedAt, like ABS
+    expect((row.updatedAt as Date).getTime()).toBe(1_700_000_100_000);
+    expect((row.mediaMetadata as Record<string, unknown>).title).toBe('The Hobbit'); // server snapshot wins
+  });
+
+  it('updates an existing row by the client session id, recomputing the date buckets', async () => {
+    const updatedAt = Date.UTC(2026, 6, 12, 12, 0, 0);
+    const { service, sessionRepo } = build({ existingRow: { id: 's-1', userId: 1, timeListening: 10 } });
+    const result = await service.syncLocalSession(makeAbsUser({ id: 1 }), {
+      id: 's-1',
+      libraryItemId: 'li_3',
+      currentTime: 200,
+      timeListening: 44,
+      updatedAt,
+    });
+    expect(result.success).toBe(true);
+    expect(sessionRepo.insert).not.toHaveBeenCalled();
+    const [id, values] = (sessionRepo.updateFromLocal as ReturnType<typeof vi.fn>).mock.calls[0] as [string, Record<string, unknown>];
+    expect(id).toBe('s-1');
+    expect(values.currentTime).toBe(200);
+    expect(values.timeListening).toBe(44);
+    expect((values.updatedAt as Date).getTime()).toBe(updatedAt);
+    expect(values.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(typeof values.dayOfWeek).toBe('string');
+  });
+
+  it("refuses to overwrite another user's session row", async () => {
+    const { service, sessionRepo } = build({ existingRow: { id: 's-1', userId: 99, timeListening: 10 } });
+    const result = await service.syncLocalSession(makeAbsUser({ id: 1 }), { id: 's-1', libraryItemId: 'li_3', currentTime: 10 });
+    expect(result.success).toBe(false);
+    expect(sessionRepo.updateFromLocal).not.toHaveBeenCalled();
   });
 });
 

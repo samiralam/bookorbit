@@ -14,6 +14,7 @@ import { ConfigService } from '@nestjs/config';
 import { tmpdir } from 'os';
 
 import type { LibraryService } from '../library/library.service';
+import type { AbsPlaybackSessionRepository } from './abs-playback-session.repository';
 import type { AbsAudioFileRow, AbsItemRow, AbsReadRepository } from './abs-read.repository';
 import { AbsSocketGateway } from './abs-socket.gateway';
 import { AbsItemsController } from './controllers/abs-items.controller';
@@ -69,6 +70,7 @@ describe('GAP §5.1–5.3 — transcode playback (playMethod=2 / HLS)', () => {
       authorsByBookIds: vi.fn().mockResolvedValue([]),
       narratorsByBookIds: vi.fn().mockResolvedValue([]),
       seriesByBookIds: vi.fn().mockResolvedValue([]),
+      genresByBookIds: vi.fn().mockResolvedValue([]),
     } as unknown as AbsReadRepository;
     const progressService = { getMediaProgress: vi.fn().mockResolvedValue(null), upsertFromCurrentTime: vi.fn() } as unknown as AbsProgressService;
     const socketGateway = { emitUserItemProgressUpdated: vi.fn(), emitUserSessionClosed: vi.fn() } as unknown as AbsSocketGateway;
@@ -77,7 +79,13 @@ describe('GAP §5.1–5.3 — transcode playback (playMethod=2 / HLS)', () => {
       createStream: vi.fn().mockResolvedValue('/hls/s/output.m3u8'),
       closeStream: vi.fn().mockResolvedValue(undefined),
     } as unknown as AbsTranscodeService;
-    return new AbsPlaybackService(readRepo, progressService, socketGateway, libraryService, transcodeService);
+    const sessionRepo = {
+      insert: vi.fn(),
+      updateSync: vi.fn(),
+      updateFromLocal: vi.fn(),
+      findById: vi.fn().mockResolvedValue(null),
+    } as unknown as AbsPlaybackSessionRepository;
+    return new AbsPlaybackService(readRepo, progressService, socketGateway, libraryService, transcodeService, sessionRepo);
   }
 
   it('honors forceTranscode by returning a transcode session (playMethod=2) with a single .m3u8 track', async () => {
@@ -131,7 +139,7 @@ describe('GAP §7.4 — continue-listening shelf (GET /api/me/items-in-progress)
 
 describe('GAP §7.3 — offline reconciliation (POST /api/session/local-all)', () => {
   it('AbsPlaybackService exposes a syncLocalSessions method (newest-updatedAt-wins merge)', () => {
-    const service = new AbsPlaybackService({} as never, {} as never, {} as never, {} as never);
+    const service = new AbsPlaybackService({} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
     expectHandler(service, 'syncLocalSessions');
   });
 });

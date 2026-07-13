@@ -6,6 +6,7 @@ import { AuthModule } from '../auth/auth.module';
 import { LibraryModule } from '../library/library.module';
 import { UserModule } from '../user/user.module';
 import { AbsEventBridgeService } from './abs-event-bridge.service';
+import { AbsPlaybackSessionRepository } from './abs-playback-session.repository';
 import { AbsReadRepository } from './abs-read.repository';
 import { AbsSocketGateway } from './abs-socket.gateway';
 import { AbsAuthController } from './auth/abs-auth.controller';
@@ -27,6 +28,7 @@ import { AbsBookmarkService } from './services/abs-bookmark.service';
 import { AbsCatalogService } from './services/abs-catalog.service';
 import { AbsPlaybackService } from './services/abs-playback.service';
 import { AbsProgressService } from './services/abs-progress.service';
+import { AbsSessionHistoryService } from './services/abs-session-history.service';
 import { AbsStreamService } from './services/abs-stream.service';
 import { AbsTranscodeService } from './services/abs-transcode.service';
 
@@ -56,9 +58,11 @@ import { AbsTranscodeService } from './services/abs-transcode.service';
     AbsSessionService,
     AbsAuthGuard,
     AbsReadRepository,
+    AbsPlaybackSessionRepository,
     AbsProgressService,
     AbsCatalogService,
     AbsPlaybackService,
+    AbsSessionHistoryService,
     AbsStreamService,
     AbsTranscodeService,
     AbsSocketGateway,

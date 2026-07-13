@@ -71,10 +71,15 @@ export class AbsItemsController {
   @Post(':id/play')
   @HttpCode(200)
   @UseGuards(AbsAuthGuard)
-  async play(@CurrentUser() user: RequestUser, @Param('id') id: string, @Body() body: StartSessionBody): Promise<Record<string, unknown>> {
+  async play(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() body: StartSessionBody,
+    @Req() req: FastifyRequest,
+  ): Promise<Record<string, unknown>> {
     const bookId = decodeAbsId('libraryItem', id);
     if (bookId === null) throw AbsHttpException.notFound();
-    return this.playbackService.startSession(user, bookId, body ?? {});
+    return this.playbackService.startSession(user, bookId, body ?? {}, req.ip);
   }
 
   /**
